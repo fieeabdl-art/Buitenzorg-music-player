@@ -1,0 +1,1 @@
+pub const APP_READY: &str = "buitenzorg://app-ready";

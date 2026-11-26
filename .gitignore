@@ -1,0 +1,28 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local user data
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
+
+# Generated build outputs
+**/node_modules/
+**/dist/
+**/target/
+**/gen/schemas/
+
+# Local tool state
+.impeccable/
+.DS_Store
+*.log
