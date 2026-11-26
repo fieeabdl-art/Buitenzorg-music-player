@@ -327,12 +327,11 @@ impl YouTubeProvider {
     if let Some(state) = provider_state {
       let _ = self.database.set_provider_status(PROVIDER, state);
     }
-    let has_api_key = !matches!(failure.kind, FailureKind::InvalidKey);
     let status = if let Some(state) = provider_state {
       ProviderStatus {
         provider: PROVIDER.to_owned(),
         state: if state == "limited" { ProviderState::Limited } else { ProviderState::Unavailable },
-        has_api_key,
+        has_api_key: true,
         checked_at: None,
         message: message.to_owned(),
       }
@@ -594,4 +593,25 @@ struct VideoDetails {
 #[derive(Deserialize)]
 struct VideoContentDetails {
   duration: String,
+}
+
+#[cfg(test)]
+mod tests {
+  use std::path::Path;
+  use std::sync::Arc;
+
+  use super::{FailureKind, ProviderFailure, ProviderState, SearchState, SystemCredentialStore, YouTubeProvider};
+  use crate::db::Database;
+
+  #[test]
+  fn invalid_key_failure_preserves_saved_key_availability() {
+    let database = Database::open(Path::new(":memory:")).unwrap();
+    let provider = YouTubeProvider::with_credentials(database, Arc::new(SystemCredentialStore)).unwrap();
+
+    let response = provider.failure_response("song", ProviderFailure { kind: FailureKind::InvalidKey });
+
+    assert_eq!(response.state, SearchState::InvalidKey);
+    assert_eq!(response.provider_status.state, ProviderState::Unavailable);
+    assert!(response.provider_status.has_api_key);
+  }
 }
