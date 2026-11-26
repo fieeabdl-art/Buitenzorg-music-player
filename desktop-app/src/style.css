@@ -459,6 +459,99 @@ h3 {
   transform: scale(1.7);
 }
 
+.history-heading-actions,
+.history-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-content {
+  display: grid;
+  gap: 12px;
+}
+
+.history-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 6px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.history-row__copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.history-row__copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row__copy small {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-status {
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.history-status--playing,
+.history-status--completed {
+  border-color: #456b8a;
+  color: var(--blue-strong);
+}
+
+.history-status--failed {
+  border-color: #784b4b;
+  color: var(--error);
+}
+
+.history-feedback {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.history-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.history-confirm > span {
+  flex: 1 1 280px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .quiet-link,
 .text-link {
   display: inline-flex;
@@ -2232,6 +2325,11 @@ h3 {
 }
 
 @media (max-width: 900px) {
+  .history-page > .page-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .library-page-heading {
     flex-direction: column;
   }
@@ -2246,6 +2344,21 @@ h3 {
 }
 
 @media (max-width: 560px) {
+  .history-heading-actions {
+    flex-wrap: wrap;
+  }
+
+  .history-row {
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .history-row__actions {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    justify-self: end;
+  }
+
   .library-actions > * {
     flex: 1 1 42%;
   }

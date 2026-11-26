@@ -4,10 +4,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const PAGE_SIZE: usize = 50;
 const INITIAL_SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const TRACK_METADATA_SCHEMA: &str = include_str!("../migrations/0002_track_metadata.sql");
+const PLAYBACK_HISTORY_SCHEMA: &str = include_str!("../migrations/0003_playback_history_sessions.sql");
 
 #[derive(Clone)]
 pub struct Database {
@@ -113,6 +114,7 @@ pub struct PlaybackTrack {
   pub album: String,
   pub format: String,
   pub duration_seconds: Option<i64>,
+  pub availability: Option<String>,
   pub genre: Option<String>,
   pub year: Option<i64>,
   pub track_number: Option<i64>,
@@ -128,6 +130,18 @@ pub struct PlaybackTrack {
 pub struct PlaybackHistoryEntry {
   pub history_id: i64,
   pub position_seconds: i64,
+  pub listened_seconds: i64,
+  pub track: PlaybackTrack,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackHistoryItem {
+  pub history_id: i64,
+  pub played_at: String,
+  pub position_seconds: i64,
+  pub listened_seconds: i64,
+  pub status: String,
   pub track: PlaybackTrack,
 }
 
@@ -189,6 +203,22 @@ impl Database {
       transaction.commit().map_err(|error| error.to_string())?;
       current_version = 2;
     }
+
+    if current_version < 3 {
+      let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+      transaction.execute_batch(PLAYBACK_HISTORY_SCHEMA).map_err(|error| error.to_string())?;
+      transaction
+        .pragma_update(None, "user_version", 3_i64)
+        .map_err(|error| error.to_string())?;
+      transaction.commit().map_err(|error| error.to_string())?;
+      current_version = 3;
+    }
+
+    connection
+      .execute("UPDATE playback_history SET status = 'interrupted' WHERE status IN ('playing', 'paused')", [])
+      .map_err(|error| error.to_string())?;
 
     if current_version != SCHEMA_VERSION {
       return Err(format!("Database migration stopped at unexpected schema version {current_version}."));
@@ -264,6 +294,7 @@ impl Database {
             album: row.get(3)?,
             format: row.get(4)?,
             duration_seconds: row.get(5)?,
+            availability: None,
             stored_name: row.get(6)?,
             artwork_name: row.get(7)?,
             genre: row.get(8)?,
@@ -280,10 +311,7 @@ impl Database {
   pub fn start_playback_history(&self, track_id: i64) -> Result<i64, String> {
     let connection = self.lock()?;
     let inserted = connection
-      .execute(
-        "INSERT INTO playback_history (track_id, position_seconds) SELECT id, 0 FROM tracks WHERE id = ?1",
-        [track_id],
-      )
+      .execute("INSERT INTO playback_history (track_id, position_seconds, status) SELECT id, 0, 'playing' FROM tracks WHERE id = ?1", [track_id])
       .map_err(|error| error.to_string())?;
     if inserted == 0 {
       return Err("Track not found in the local library.".to_owned());
@@ -291,45 +319,121 @@ impl Database {
     Ok(connection.last_insert_rowid())
   }
 
-  pub fn save_playback_position(&self, history_id: i64, position_seconds: i64) -> Result<(), String> {
-    if history_id <= 0 || position_seconds < 0 {
-      return Err("Playback position is invalid.".to_owned());
+  pub fn update_playback_history(
+    &self,
+    history_id: i64,
+    position_seconds: i64,
+    listened_seconds: i64,
+    status: &str,
+  ) -> Result<(), String> {
+    if history_id <= 0
+      || position_seconds < 0
+      || listened_seconds < 0
+      || !matches!(status, "playing" | "paused" | "completed" | "stopped" | "failed" | "interrupted")
+    {
+      return Err("Playback history update is invalid.".to_owned());
     }
     let connection = self.lock()?;
     let updated = connection
       .execute(
-        "UPDATE playback_history SET position_seconds = ?1 WHERE id = ?2",
-        params![position_seconds, history_id],
+        "UPDATE playback_history SET position_seconds = ?1, listened_seconds = ?2, status = ?3 WHERE id = ?4 AND status IN ('playing', 'paused', 'interrupted')",
+        params![position_seconds, listened_seconds, status, history_id],
       )
       .map_err(|error| error.to_string())?;
     if updated == 0 {
-      return Err("Playback history entry not found.".to_owned());
+      return Err("Playback history entry is missing or no longer active.".to_owned());
     }
     Ok(())
+  }
+
+  pub fn playback_history(&self, limit: usize) -> Result<Vec<PlaybackHistoryItem>, String> {
+    let limit = limit.clamp(1, 100) as i64;
+    let connection = self.lock()?;
+    let mut statement = connection
+      .prepare("SELECT h.id, h.played_at, h.position_seconds, h.listened_seconds, h.status, t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM playback_history h JOIN tracks t ON t.id = h.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY h.played_at DESC, h.id DESC LIMIT ?1")
+      .map_err(|error| error.to_string())?;
+    let rows = statement
+      .query_map([limit], |row| {
+        Ok(PlaybackHistoryItem {
+          history_id: row.get(0)?,
+          played_at: row.get(1)?,
+          position_seconds: row.get(2)?,
+          listened_seconds: row.get(3)?,
+          status: row.get(4)?,
+          track: PlaybackTrack {
+            id: row.get(5)?,
+            title: row.get(6)?,
+            artist: row.get(7)?,
+            album: row.get(8)?,
+            format: row.get(9)?,
+            duration_seconds: row.get(10)?,
+            availability: None,
+            stored_name: row.get(11)?,
+            artwork_name: row.get(12)?,
+            genre: row.get(13)?,
+            year: row.get(14)?,
+            track_number: row.get(15)?,
+            artwork_url: None,
+          },
+        })
+      })
+      .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+  }
+
+  pub fn delete_playback_history(&self, history_id: i64) -> Result<(), String> {
+    if history_id <= 0 {
+      return Err("Playback history entry identifier is invalid.".to_owned());
+    }
+    let connection = self.lock()?;
+    let deleted = connection
+      .execute("DELETE FROM playback_history WHERE id = ?1 AND status NOT IN ('playing', 'paused')", [history_id])
+      .map_err(|error| error.to_string())?;
+    if deleted == 0 {
+      let status: Option<String> = connection
+        .query_row("SELECT status FROM playback_history WHERE id = ?1", [history_id], |row| row.get(0))
+        .optional()
+        .map_err(|error| error.to_string())?;
+      return Err(if matches!(status.as_deref(), Some("playing" | "paused")) {
+        "Stop the active playback before removing its history entry.".to_owned()
+      } else {
+        "Playback history entry not found.".to_owned()
+      });
+    }
+    Ok(())
+  }
+
+  pub fn clear_playback_history(&self) -> Result<usize, String> {
+    self
+      .lock()?
+      .execute("DELETE FROM playback_history WHERE status NOT IN ('playing', 'paused')", [])
+      .map_err(|error| error.to_string())
   }
 
   pub fn latest_playback_history(&self) -> Result<Option<PlaybackHistoryEntry>, String> {
     self
       .lock()?
       .query_row(
-        "SELECT h.id, h.position_seconds, t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM playback_history h JOIN tracks t ON t.id = h.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY h.played_at DESC, h.id DESC LIMIT 1",
+        "SELECT h.id, h.position_seconds, h.listened_seconds, t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM playback_history h JOIN tracks t ON t.id = h.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id WHERE h.status IN ('playing', 'paused', 'interrupted') ORDER BY h.played_at DESC, h.id DESC LIMIT 1",
         [],
         |row| {
           Ok(PlaybackHistoryEntry {
             history_id: row.get(0)?,
             position_seconds: row.get(1)?,
+            listened_seconds: row.get(2)?,
             track: PlaybackTrack {
-              id: row.get(2)?,
-              title: row.get(3)?,
-              artist: row.get(4)?,
-              album: row.get(5)?,
-              format: row.get(6)?,
-              duration_seconds: row.get(7)?,
-              stored_name: row.get(8)?,
-              artwork_name: row.get(9)?,
-              genre: row.get(10)?,
-              year: row.get(11)?,
-              track_number: row.get(12)?,
+              id: row.get(3)?,
+              title: row.get(4)?,
+              artist: row.get(5)?,
+              album: row.get(6)?,
+              format: row.get(7)?,
+              duration_seconds: row.get(8)?,
+              availability: None,
+              stored_name: row.get(9)?,
+              artwork_name: row.get(10)?,
+              genre: row.get(11)?,
+              year: row.get(12)?,
+              track_number: row.get(13)?,
               artwork_url: None,
             },
           })
@@ -885,11 +989,11 @@ mod tests {
     let path = directory.join("library.sqlite3");
 
     let database = Database::open(&path).unwrap();
-    assert_eq!(database.schema_version().unwrap(), 2);
+    assert_eq!(database.schema_version().unwrap(), 3);
     drop(database);
 
     let reopened = Database::open(&path).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 2);
+    assert_eq!(reopened.schema_version().unwrap(), 3);
     assert_eq!(reopened.library_page("all", 0).unwrap().total_count, 0);
 
     drop(reopened);
@@ -912,7 +1016,7 @@ mod tests {
       .unwrap()
       .query_row("SELECT value FROM preserved_user_data", [], |row| row.get(0))
       .unwrap();
-    assert_eq!(database.schema_version().unwrap(), 2);
+    assert_eq!(database.schema_version().unwrap(), 3);
     assert_eq!(value, "keep");
 
     drop(database);
@@ -939,7 +1043,7 @@ mod tests {
     }
 
     let database = Database::open(&path).unwrap();
-    assert_eq!(database.schema_version().unwrap(), 2);
+    assert_eq!(database.schema_version().unwrap(), 3);
     let item = &database.library_page("all", 0).unwrap().items[0];
     assert_eq!(item.title, "Legacy track");
     assert_eq!(item.genre, None);
@@ -1070,13 +1174,82 @@ mod tests {
       .unwrap();
 
     let history_id = database.start_playback_history(track_id).unwrap();
-    database.save_playback_position(history_id, 17).unwrap();
+    database.update_playback_history(history_id, 17, 9, "paused").unwrap();
     let latest = database.latest_playback_history().unwrap().unwrap();
     assert_eq!(latest.history_id, history_id);
     assert_eq!(latest.position_seconds, 17);
+    assert_eq!(latest.listened_seconds, 9);
     assert_eq!(latest.track.id, track_id);
     assert_eq!(latest.track.title, "Resume point");
-    assert!(database.save_playback_position(history_id, -1).is_err());
+    assert!(database.update_playback_history(history_id, -1, 0, "paused").is_err());
     assert!(database.start_playback_history(i64::MAX).is_err());
+  }
+
+  #[test]
+  fn playback_history_lists_sessions_and_protects_active_entries_from_deletion() {
+    let database = Database::open_in_memory().unwrap();
+    let track_id = database.insert_track(&sample_track(&"f".repeat(64), &format!("{}.wav", "f".repeat(64)), "History track")).unwrap();
+    let active_id = database.start_playback_history(track_id).unwrap();
+    database.update_playback_history(active_id, 15, 12, "paused").unwrap();
+    let completed_id = database.start_playback_history(track_id).unwrap();
+    database.update_playback_history(completed_id, 60, 60, "completed").unwrap();
+
+    let entries = database.playback_history(100).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].history_id, completed_id);
+    assert_eq!(entries[0].status, "completed");
+    assert_eq!(entries[0].listened_seconds, 60);
+    assert_eq!(entries[0].track.title, "History track");
+    assert_eq!(entries[1].history_id, active_id);
+    assert_eq!(entries[1].status, "paused");
+    assert!(database.delete_playback_history(active_id).is_err());
+
+    assert_eq!(database.clear_playback_history().unwrap(), 1);
+    assert_eq!(database.playback_history(100).unwrap().iter().map(|entry| entry.history_id).collect::<Vec<_>>(), vec![active_id]);
+    database.update_playback_history(active_id, 0, 12, "stopped").unwrap();
+    database.delete_playback_history(active_id).unwrap();
+    assert!(database.playback_history(100).unwrap().is_empty());
+  }
+
+  #[test]
+  fn reopening_database_marks_live_sessions_interrupted_and_keeps_resume_position() {
+    let directory = test_directory();
+    let path = directory.join("library.sqlite3");
+    let track_id;
+    let history_id;
+    {
+      let database = Database::open(&path).unwrap();
+      track_id = database.insert_track(&sample_track(&"9".repeat(64), &format!("{}.wav", "9".repeat(64)), "Interrupted track")).unwrap();
+      history_id = database.start_playback_history(track_id).unwrap();
+      database.update_playback_history(history_id, 21, 17, "paused").unwrap();
+    }
+
+    let reopened = Database::open(&path).unwrap();
+    let entries = reopened.playback_history(100).unwrap();
+    assert_eq!(entries[0].status, "interrupted");
+    assert_eq!(entries[0].position_seconds, 21);
+    assert_eq!(entries[0].listened_seconds, 17);
+    let resume = reopened.latest_playback_history().unwrap().unwrap();
+    assert_eq!(resume.history_id, history_id);
+    assert_eq!(resume.track.id, track_id);
+    reopened.update_playback_history(history_id, 22, 18, "paused").unwrap();
+    assert_eq!(reopened.playback_history(100).unwrap()[0].status, "paused");
+
+    drop(reopened);
+    fs::remove_dir_all(directory).unwrap();
+  }
+
+  #[test]
+  fn playback_history_is_capped_at_the_latest_one_hundred_sessions() {
+    let database = Database::open_in_memory().unwrap();
+    let track_id = database.insert_track(&sample_track(&"8".repeat(64), &format!("{}.wav", "8".repeat(64)), "History limit")).unwrap();
+    for _ in 0..101 {
+      let history_id = database.start_playback_history(track_id).unwrap();
+      database.update_playback_history(history_id, 0, 0, "completed").unwrap();
+    }
+
+    assert_eq!(database.playback_history(100).unwrap().len(), 100);
+    assert_eq!(database.playback_history(500).unwrap().len(), 100);
+    assert_eq!(database.playback_history(1).unwrap().len(), 1);
   }
 }

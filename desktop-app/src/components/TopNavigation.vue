@@ -3,6 +3,7 @@ import {
   Compass,
   Download,
   Headphones,
+  History,
   Info,
   LibraryBig,
   ListMusic,
@@ -77,6 +78,7 @@ function closeMoreMenu() {
       </summary>
       <nav class="more-menu__panel" aria-label="More destinations">
         <RouterLink :to="{ name: 'downloads' }" @click="closeMoreMenu"><Download :size="16" aria-hidden="true" />Downloads</RouterLink>
+        <RouterLink :to="{ name: 'history' }" @click="closeMoreMenu"><History :size="16" aria-hidden="true" />History</RouterLink>
         <RouterLink :to="{ name: 'settings' }" @click="closeMoreMenu"><Settings2 :size="16" aria-hidden="true" />Settings</RouterLink>
         <RouterLink :to="{ name: 'profile' }" @click="closeMoreMenu"><UserRound :size="16" aria-hidden="true" />Profile</RouterLink>
         <RouterLink :to="{ name: 'about' }" @click="closeMoreMenu"><Info :size="16" aria-hidden="true" />About</RouterLink>

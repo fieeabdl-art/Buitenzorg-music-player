@@ -131,13 +131,41 @@ pub async fn start_playback_history(state: State<'_, LibraryService>, track_id: 
 }
 
 #[tauri::command]
-pub async fn save_playback_position(
+pub async fn update_playback_history(
   state: State<'_, LibraryService>,
   history_id: i64,
   position_seconds: i64,
+  listened_seconds: i64,
+  status: String,
 ) -> Result<(), String> {
   let library = state.inner().clone();
-  tauri::async_runtime::spawn_blocking(move || library.save_playback_position(history_id, position_seconds))
+  tauri::async_runtime::spawn_blocking(move || {
+    library.update_playback_history(history_id, position_seconds, listened_seconds, &status)
+  })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn get_playback_history(state: State<'_, LibraryService>) -> Result<Vec<crate::db::PlaybackHistoryItem>, String> {
+  let library = state.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || library.playback_history())
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn delete_playback_history(state: State<'_, LibraryService>, history_id: i64) -> Result<(), String> {
+  let library = state.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || library.delete_playback_history(history_id))
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn clear_playback_history(state: State<'_, LibraryService>) -> Result<usize, String> {
+  let library = state.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || library.clear_playback_history())
     .await
     .map_err(|error| error.to_string())?
 }

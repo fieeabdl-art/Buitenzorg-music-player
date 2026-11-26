@@ -1,5 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { LibraryItem, PlaylistTrack } from '../types/library'
+import type { PlaybackHistoryStatus } from '../types/history'
 import type { PlaybackResumeSource, PlayerTrack, ResolvedTrackSource } from '../types/player'
 
 interface BackendPlaybackSource {
@@ -10,6 +11,7 @@ interface BackendPlaybackSource {
 interface BackendPlaybackResume extends BackendPlaybackSource {
   historyId: number
   positionSeconds: number
+  listenedSeconds: number
 }
 
 function requireDesktop(): void {
@@ -64,7 +66,12 @@ export function startPlaybackHistory(trackId: number): Promise<number> {
   return invoke<number>('start_playback_history', { trackId })
 }
 
-export function savePlaybackPosition(historyId: number, positionSeconds: number): Promise<void> {
+export function updatePlaybackHistory(
+  historyId: number,
+  positionSeconds: number,
+  listenedSeconds: number,
+  status: PlaybackHistoryStatus,
+): Promise<void> {
   requireDesktop()
-  return invoke<void>('save_playback_position', { historyId, positionSeconds })
+  return invoke<void>('update_playback_history', { historyId, positionSeconds, listenedSeconds, status })
 }

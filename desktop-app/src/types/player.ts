@@ -22,4 +22,5 @@ export interface ResolvedTrackSource {
 export interface PlaybackResumeSource extends ResolvedTrackSource {
   historyId: number
   positionSeconds: number
+  listenedSeconds: number
 }

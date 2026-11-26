@@ -9,7 +9,7 @@ use lofty::tag::Accessor;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::db::{Database, LibraryPage, NewTrack, PlaybackTrack, PlaylistSummary, PlaylistTrack};
+use crate::db::{Database, LibraryPage, NewTrack, PlaybackHistoryItem, PlaybackTrack, PlaylistSummary, PlaylistTrack};
 use crate::media_server::LocalMediaServer;
 
 const SUPPORTED_EXTENSIONS: &[&str] = &["aac", "aif", "aiff", "flac", "m4a", "mp3", "mp4", "oga", "ogg", "opus", "wav"];
@@ -68,6 +68,7 @@ pub struct ResolvedPlaybackTrack {
 pub struct ResumablePlayback {
   pub history_id: i64,
   pub position_seconds: i64,
+  pub listened_seconds: i64,
   pub track: PlaybackTrack,
   pub audio_url: String,
 }
@@ -336,8 +337,35 @@ impl LibraryService {
     self.database.start_playback_history(track_id)
   }
 
-  pub fn save_playback_position(&self, history_id: i64, position_seconds: i64) -> Result<(), String> {
-    self.database.save_playback_position(history_id, position_seconds)
+  pub fn update_playback_history(
+    &self,
+    history_id: i64,
+    position_seconds: i64,
+    listened_seconds: i64,
+    status: &str,
+  ) -> Result<(), String> {
+    self.database.update_playback_history(history_id, position_seconds, listened_seconds, status)
+  }
+
+  pub fn playback_history(&self) -> Result<Vec<PlaybackHistoryItem>, String> {
+    let mut entries = self.database.playback_history(100)?;
+    for entry in &mut entries {
+      entry.track.availability = Some(self.file_availability(&entry.track.stored_name));
+      entry.track.artwork_url = entry
+        .track
+        .artwork_name
+        .as_deref()
+        .and_then(|name| self.media_server.url_for_artwork(name).ok());
+    }
+    Ok(entries)
+  }
+
+  pub fn delete_playback_history(&self, history_id: i64) -> Result<(), String> {
+    self.database.delete_playback_history(history_id)
+  }
+
+  pub fn clear_playback_history(&self) -> Result<usize, String> {
+    self.database.clear_playback_history()
   }
 
   pub fn resumable_playback(&self) -> Result<Option<ResumablePlayback>, String> {
@@ -346,6 +374,7 @@ impl LibraryService {
     };
     self.playable_audio_path(&entry.track.stored_name)?;
     let audio_url = self.media_server.url_for(&entry.track.stored_name)?;
+    entry.track.availability = Some("available".to_owned());
     entry.track.artwork_url = entry
       .track
       .artwork_name
@@ -354,6 +383,7 @@ impl LibraryService {
     Ok(Some(ResumablePlayback {
       history_id: entry.history_id,
       position_seconds: entry.position_seconds,
+      listened_seconds: entry.listened_seconds,
       track: entry.track,
       audio_url,
     }))
@@ -1037,7 +1067,7 @@ mod tests {
     assert_eq!(resolved.track.format, "wav");
 
     let history_id = service.start_playback_history(track_id).unwrap();
-    service.save_playback_position(history_id, 1).unwrap();
+    service.update_playback_history(history_id, 1, 1, "paused").unwrap();
     let resume = service.resumable_playback().unwrap().unwrap();
     assert_eq!(resume.history_id, history_id);
     assert_eq!(resume.position_seconds, 1);

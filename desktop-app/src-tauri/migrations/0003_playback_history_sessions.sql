@@ -1,0 +1,2 @@
+ALTER TABLE playback_history ADD COLUMN listened_seconds INTEGER NOT NULL DEFAULT 0 CHECK (listened_seconds >= 0);
+ALTER TABLE playback_history ADD COLUMN status TEXT NOT NULL DEFAULT 'interrupted' CHECK (status IN ('playing', 'paused', 'completed', 'stopped', 'failed', 'interrupted'));

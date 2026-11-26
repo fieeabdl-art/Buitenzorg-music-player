@@ -15,7 +15,7 @@ A local-first desktop music library and player. Ubuntu/Linux is the first target
 ## Metadata lokal dan riwayat
 
 - Metadata tag lokal yang tersedia—termasuk genre, tahun, dan nomor track—disimpan bersama judul, artis, album, dan durasi. Artwork tertanam disimpan di direktori terkelola dan memiliki tampilan fallback jika berkas gambar tidak tersedia.
-- Playlist lokal mendukung CRUD dan pengurutan lagu. Riwayat saat ini menyimpan posisi untuk melanjutkan pemutaran terakhir; daftar riwayat dan penghapusannya belum tersedia.
+- Playlist lokal mendukung CRUD dan pengurutan lagu. Riwayat menyimpan waktu sesi, status, posisi resume, dan durasi yang benar-benar diputar; pengguna dapat membuka 100 sesi terbaru, menghapus sesi nonaktif, atau membersihkan riwayat tanpa menghentikan sesi aktif.
 
 ## Project
 

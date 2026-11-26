@@ -3,6 +3,7 @@ import AboutPage from '../pages/AboutPage.vue'
 import DiscoverPage from '../pages/DiscoverPage.vue'
 import DownloadsPage from '../pages/DownloadsPage.vue'
 import HomePage from '../pages/HomePage.vue'
+import HistoryPage from '../pages/HistoryPage.vue'
 import LibraryPage from '../pages/LibraryPage.vue'
 import PlaylistsPage from '../pages/PlaylistsPage.vue'
 import ProfilePage from '../pages/ProfilePage.vue'
@@ -15,6 +16,7 @@ export const routes = [
   { path: '/search', name: 'search', component: SearchPage, meta: { title: 'Search' } },
   { path: '/library', name: 'library', component: LibraryPage, meta: { title: 'Library' } },
   { path: '/playlists', name: 'playlists', component: PlaylistsPage, meta: { title: 'Playlists' } },
+  { path: '/history', name: 'history', component: HistoryPage, meta: { title: 'History' } },
   { path: '/downloads', name: 'downloads', component: DownloadsPage, meta: { title: 'Downloads' } },
   { path: '/settings', name: 'settings', component: SettingsPage, meta: { title: 'Settings' } },
   { path: '/profile', name: 'profile', component: ProfilePage, meta: { title: 'Profile' } },

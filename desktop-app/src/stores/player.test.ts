@@ -6,8 +6,8 @@ import { usePlayerStore } from './player'
 const playbackServices = vi.hoisted(() => ({
   getLastPlayback: vi.fn(),
   resolveLocalTrack: vi.fn(),
-  savePlaybackPosition: vi.fn(),
   startPlaybackHistory: vi.fn(),
+  updatePlaybackHistory: vi.fn(),
 }))
 
 vi.mock('../services/audioPlayback', () => playbackServices)
@@ -84,7 +84,7 @@ describe('persistent local audio player', () => {
       audioPath: `/managed/${trackId}.wav`,
       audioUrl: `asset://managed/${trackId}.wav`,
     }))
-    playbackServices.savePlaybackPosition.mockResolvedValue(undefined)
+    playbackServices.updatePlaybackHistory.mockResolvedValue(undefined)
     playbackServices.startPlaybackHistory.mockImplementation(async (trackId: number) => trackId + 100)
   })
 
@@ -156,6 +156,22 @@ describe('persistent local audio player', () => {
     expect(player.isPlaying).toBe(false)
   })
 
+  it('counts playback time without counting seek jumps', async () => {
+    const player = usePlayerStore()
+    const audio = makeAudio()
+    attach(player, audio)
+    await player.playQueue([firstTrack])
+
+    audio.currentTime = 10
+    audio.dispatchEvent(new Event('timeupdate'))
+    player.seek(25)
+    audio.currentTime = 26
+    audio.dispatchEvent(new Event('timeupdate'))
+    player.pause()
+
+    await vi.waitFor(() => expect(playbackServices.updatePlaybackHistory).toHaveBeenLastCalledWith(101, 26, 11, 'paused'))
+  })
+
   it('autoplays the next track when the current track ends', async () => {
     const player = usePlayerStore()
     const audio = makeAudio()
@@ -200,7 +216,9 @@ describe('persistent local audio player', () => {
     await Promise.resolve()
     expect(player.currentTime).toBe(0)
     expect(player.isPlaying).toBe(true)
-    await vi.waitFor(() => expect(playbackServices.savePlaybackPosition).toHaveBeenLastCalledWith(101, 0))
+    const historyCallsBeforeRepeat = playbackServices.startPlaybackHistory.mock.calls.length
+    await vi.waitFor(() => expect(playbackServices.updatePlaybackHistory).toHaveBeenLastCalledWith(101, 0, expect.any(Number), 'playing'))
+    expect(playbackServices.startPlaybackHistory).toHaveBeenCalledTimes(historyCallsBeforeRepeat)
   })
 
   it('reports missing files and unsupported media instead of claiming playback', async () => {
@@ -212,6 +230,7 @@ describe('persistent local audio player', () => {
     await player.playQueue([firstTrack])
     expect(player.isPlaying).toBe(false)
     expect(player.error).toContain('managed audio file is missing')
+    expect(playbackServices.updatePlaybackHistory).toHaveBeenLastCalledWith(101, 0, 0, 'failed')
 
     audio.playFailure = new Error('Unsupported media')
     playbackServices.resolveLocalTrack.mockResolvedValueOnce({
@@ -239,6 +258,7 @@ describe('persistent local audio player', () => {
       track: firstTrack,
       historyId: 77,
       positionSeconds: 16,
+      listenedSeconds: 9,
       audioPath: '/managed/1.wav',
       audioUrl: 'asset://managed/1.wav',
     })
@@ -272,7 +292,7 @@ describe('persistent local audio player', () => {
     }))
 
     const pendingPlayback = player.playQueue([firstTrack])
-    await Promise.resolve()
+    await vi.waitFor(() => expect(typeof resolveSource).toBe('function'))
     player.detachAudio(audio as unknown as HTMLAudioElement)
     resolveSource({ track: firstTrack, audioPath: '/managed/1.wav', audioUrl: 'asset://managed/1.wav' })
     await pendingPlayback
@@ -290,6 +310,6 @@ describe('persistent local audio player', () => {
     audio.currentTime = 23
 
     player.detachAudio(audio as unknown as HTMLAudioElement)
-    await vi.waitFor(() => expect(playbackServices.savePlaybackPosition).toHaveBeenLastCalledWith(101, 23))
+    await vi.waitFor(() => expect(playbackServices.updatePlaybackHistory).toHaveBeenLastCalledWith(101, 23, 23, 'paused'))
   })
 })

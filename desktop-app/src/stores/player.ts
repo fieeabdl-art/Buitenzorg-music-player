@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, shallowRef } from 'vue'
-import { getLastPlayback, resolveLocalTrack, savePlaybackPosition, startPlaybackHistory } from '../services/audioPlayback'
+import { getLastPlayback, resolveLocalTrack, startPlaybackHistory, updatePlaybackHistory } from '../services/audioPlayback'
+import type { PlaybackHistoryStatus } from '../types/history'
 import type { PlaybackResumeSource, PlayerTrack, RepeatMode } from '../types/player'
 
 const POSITION_SAVE_INTERVAL_SECONDS = 10
@@ -48,9 +49,15 @@ export const usePlayerStore = defineStore('player', () => {
   const repeatMode = ref<RepeatMode>('off')
   const error = ref('')
   const historyWarning = ref('')
+  const historyRevision = ref(0)
   const queueOpen = ref(false)
   let historyId: number | null = null
   let lastSavedSecond = -1
+  let lastSavedListenedSecond = -1
+  let lastSavedHistoryId: number | null = null
+  let lastSavedStatus: PlaybackHistoryStatus | null = null
+  let listenedSeconds = 0
+  let lastObservedPosition: number | null = null
   let pendingResumePosition: number | null = null
   let transitionId = 0
   let suppressPauseSave = false
@@ -61,6 +68,11 @@ export const usePlayerStore = defineStore('player', () => {
     const audio = audioElement.value
     if (!audio) return
     currentTime.value = Number.isFinite(audio.currentTime) ? Math.max(0, audio.currentTime) : 0
+    if (historyId !== null && isPlaying.value && lastObservedPosition !== null && currentTime.value >= lastObservedPosition) {
+      const difference = currentTime.value - lastObservedPosition
+      listenedSeconds += difference
+    }
+    lastObservedPosition = currentTime.value
     if (Number.isFinite(audio.duration) && audio.duration > 0) {
       duration.value = audio.duration
     }
@@ -87,13 +99,16 @@ export const usePlayerStore = defineStore('player', () => {
     isPlaying.value = true
     isLoading.value = false
     error.value = ''
+    lastObservedPosition = audioElement.value?.currentTime ?? currentTime.value
+    void persistPosition(Math.floor(currentTime.value), 'playing')
   }
 
   function handlePause() {
+    if (!suppressPauseSave && isPlaying.value) updateTimeFromAudio()
     isPlaying.value = false
     isLoading.value = false
     const position = audioElement.value?.currentTime ?? currentTime.value
-    if (!suppressPauseSave) void persistPosition(Math.floor(position))
+    if (!suppressPauseSave) void persistPosition(Math.floor(position), 'paused')
   }
 
   function handleAudioError() {
@@ -102,20 +117,28 @@ export const usePlayerStore = defineStore('player', () => {
     error.value = audioErrorMessage(audio)
     isPlaying.value = false
     isLoading.value = false
+    void finishCurrentHistory('failed', Math.floor(audio.currentTime))
   }
 
-  function handleEnded() {
+  async function handleEnded() {
+    if (isPlaying.value) updateTimeFromAudio()
     isPlaying.value = false
     if (repeatMode.value === 'one') {
       const audio = audioElement.value
       if (!audio) return
       audio.currentTime = 0
       currentTime.value = 0
-      void persistPosition(0)
+      lastObservedPosition = 0
+      void persistPosition(0, 'playing')
       void resume()
       return
     }
-    void next()
+    await finishCurrentHistory('completed', Math.floor(currentTime.value))
+    await next()
+  }
+
+  function handleSeeking() {
+    lastObservedPosition = audioElement.value?.currentTime ?? currentTime.value
   }
 
   const audioListeners: Array<[keyof HTMLMediaElementEventMap, EventListener]> = [
@@ -125,20 +148,48 @@ export const usePlayerStore = defineStore('player', () => {
     ['play', handlePlay],
     ['pause', handlePause],
     ['ended', handleEnded],
+    ['seeking', handleSeeking],
     ['error', handleAudioError],
   ]
 
-  async function persistPosition(position: number): Promise<void> {
-    const currentHistoryId = historyId
+  async function persistPosition(
+    position: number,
+    status: PlaybackHistoryStatus = isPlaying.value ? 'playing' : 'paused',
+    targetHistoryId = historyId,
+  ): Promise<void> {
+    const currentHistoryId = targetHistoryId
     if (currentHistoryId === null || !Number.isFinite(position)) return
     const safePosition = Math.max(0, Math.floor(position))
-    lastSavedSecond = safePosition
+    const safeListenedSeconds = Math.max(0, Math.floor(listenedSeconds))
+    if (
+      currentHistoryId === lastSavedHistoryId
+      && safePosition === lastSavedSecond
+      && safeListenedSeconds === lastSavedListenedSecond
+      && status === lastSavedStatus
+    ) return
+    if (currentHistoryId === historyId) {
+      lastSavedHistoryId = currentHistoryId
+      lastSavedSecond = safePosition
+      lastSavedListenedSecond = safeListenedSeconds
+      lastSavedStatus = status
+    }
     historyWrites = historyWrites
-      .then(() => savePlaybackPosition(currentHistoryId, safePosition))
+      .then(async () => {
+        await updatePlaybackHistory(currentHistoryId, safePosition, safeListenedSeconds, status)
+        historyWarning.value = ''
+      })
       .catch(() => {
         historyWarning.value = 'Playback history could not be saved.'
       })
     await historyWrites
+    historyRevision.value += 1
+  }
+
+  async function finishCurrentHistory(status: PlaybackHistoryStatus, position: number): Promise<void> {
+    const currentHistoryId = historyId
+    if (currentHistoryId === null) return
+    historyId = null
+    await persistPosition(position, status, currentHistoryId)
   }
 
   async function beginPlayback(track: PlayerTrack): Promise<void> {
@@ -149,10 +200,15 @@ export const usePlayerStore = defineStore('player', () => {
     }
 
     const requestId = ++transitionId
-    await persistPosition(Math.floor(audio.currentTime))
+    if (isPlaying.value) updateTimeFromAudio()
+    await finishCurrentHistory('stopped', Math.floor(audio.currentTime))
     if (requestId !== transitionId) return
-    historyId = null
     lastSavedSecond = -1
+    lastSavedListenedSecond = -1
+    lastSavedHistoryId = null
+    lastSavedStatus = null
+    listenedSeconds = 0
+    lastObservedPosition = 0
     pendingResumePosition = null
     suppressPauseSave = true
     audio.pause()
@@ -169,20 +225,33 @@ export const usePlayerStore = defineStore('player', () => {
     isLoading.value = true
 
     try {
+      const newHistoryId = await startPlaybackHistory(track.id)
+      if (requestId !== transitionId) {
+        await updatePlaybackHistory(newHistoryId, 0, 0, 'interrupted')
+        return
+      }
+      historyId = newHistoryId
+      lastSavedHistoryId = newHistoryId
+      lastSavedSecond = 0
+      lastSavedListenedSecond = 0
+      lastSavedStatus = 'playing'
       const source = await resolveLocalTrack(track.id)
-      if (requestId !== transitionId) return
+      if (requestId !== transitionId) {
+        await updatePlaybackHistory(newHistoryId, Math.floor(currentTime.value), Math.floor(listenedSeconds), 'interrupted')
+        return
+      }
       audio.src = source.audioUrl
       audio.load()
       await audio.play()
-      if (requestId !== transitionId) return
+      if (requestId !== transitionId) {
+        await updatePlaybackHistory(newHistoryId, Math.floor(currentTime.value), Math.floor(listenedSeconds), 'interrupted')
+        return
+      }
       isLoading.value = false
       isPlaying.value = !audio.paused
       if (isPlaying.value) {
         try {
-          const newHistoryId = await startPlaybackHistory(track.id)
-          if (requestId !== transitionId) return
-          historyId = newHistoryId
-          await persistPosition(Math.floor(currentTime.value))
+          await persistPosition(Math.floor(currentTime.value), 'playing')
         } catch {
           historyWarning.value = 'Playback history could not be saved.'
         }
@@ -198,6 +267,7 @@ export const usePlayerStore = defineStore('player', () => {
       isPlaying.value = false
       isLoading.value = false
       error.value = message
+      await finishCurrentHistory('failed', Math.floor(audio.currentTime))
     }
   }
 
@@ -230,11 +300,19 @@ export const usePlayerStore = defineStore('player', () => {
       error.value = ''
       if (isPlaying.value && historyId === null && currentTrack.value) {
         historyId = await startPlaybackHistory(currentTrack.value.id)
+        listenedSeconds = 0
+        lastObservedPosition = audio.currentTime
+        lastSavedHistoryId = historyId
+        lastSavedSecond = Math.floor(audio.currentTime)
+        lastSavedListenedSecond = 0
+        lastSavedStatus = 'playing'
       }
+      if (isPlaying.value) await persistPosition(Math.floor(audio.currentTime), 'playing')
     } catch (playbackError) {
       error.value = playbackErrorMessage(playbackError, audio)
       isPlaying.value = false
       isLoading.value = false
+      await finishCurrentHistory('failed', Math.floor(audio.currentTime))
     }
   }
 
@@ -242,7 +320,7 @@ export const usePlayerStore = defineStore('player', () => {
     const audio = audioElement.value
     audio?.pause()
     isPlaying.value = false
-    void persistPosition(Math.floor(audio?.currentTime ?? currentTime.value))
+    void persistPosition(Math.floor(audio?.currentTime ?? currentTime.value), 'paused')
   }
 
   function togglePlayback(): Promise<void> | void {
@@ -261,7 +339,8 @@ export const usePlayerStore = defineStore('player', () => {
     const audio = audioElement.value
     if (!audio) return
     transitionId += 1
-    void persistPosition(0)
+    if (isPlaying.value) updateTimeFromAudio()
+    void finishCurrentHistory('stopped', 0)
     suppressPauseSave = true
     audio.pause()
     audio.currentTime = 0
@@ -270,6 +349,7 @@ export const usePlayerStore = defineStore('player', () => {
     isPlaying.value = false
     isLoading.value = false
     pendingResumePosition = null
+    lastObservedPosition = 0
     error.value = ''
   }
 
@@ -280,6 +360,7 @@ export const usePlayerStore = defineStore('player', () => {
     const bounded = Math.max(0, Math.min(position, maximum))
     audio.currentTime = bounded
     currentTime.value = bounded
+    lastObservedPosition = bounded
   }
 
   function setVolume(value: number): void {
@@ -355,12 +436,18 @@ export const usePlayerStore = defineStore('player', () => {
       queue.value = [saved.track]
       queueIndex.value = 0
       historyId = saved.historyId
+      listenedSeconds = saved.listenedSeconds
       lastSavedSecond = saved.positionSeconds
+      lastSavedListenedSecond = saved.listenedSeconds
+      lastSavedHistoryId = saved.historyId
+      lastSavedStatus = 'interrupted'
+      lastObservedPosition = saved.positionSeconds
       duration.value = Math.max(0, saved.track.durationSeconds ?? 0)
       pendingResumePosition = Math.max(0, saved.positionSeconds)
       audio.src = saved.audioUrl
       audio.load()
       error.value = ''
+      void persistPosition(saved.positionSeconds, 'paused')
     } catch (restoreError) {
       error.value = restoreError instanceof Error ? restoreError.message : 'The last local track could not be restored.'
     }
@@ -414,7 +501,8 @@ export const usePlayerStore = defineStore('player', () => {
   function detachAudio(element: HTMLAudioElement) {
     if (audioElement.value === element) {
       transitionId += 1
-      void persistPosition(Math.floor(element.currentTime))
+      if (isPlaying.value) updateTimeFromAudio()
+      void persistPosition(Math.floor(element.currentTime), 'paused')
       for (const [event, listener] of audioListeners) element.removeEventListener(event, listener)
       if (typeof window !== 'undefined') window.removeEventListener('keydown', handleKeyboardShortcut)
       suppressPauseSave = true
@@ -437,6 +525,7 @@ export const usePlayerStore = defineStore('player', () => {
     duration,
     error,
     historyWarning,
+    historyRevision,
     isLoading,
     isMuted,
     isPlaying,
