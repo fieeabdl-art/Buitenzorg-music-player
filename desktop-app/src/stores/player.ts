@@ -114,6 +114,7 @@ export const usePlayerStore = defineStore('player', () => {
   function handleAudioError() {
     const audio = audioElement.value
     if (!audio) return
+    if (isPlaying.value) updateTimeFromAudio()
     error.value = audioErrorMessage(audio)
     isPlaying.value = false
     isLoading.value = false
@@ -318,6 +319,7 @@ export const usePlayerStore = defineStore('player', () => {
 
   function pause(): void {
     const audio = audioElement.value
+    if (isPlaying.value) updateTimeFromAudio()
     audio?.pause()
     isPlaying.value = false
     void persistPosition(Math.floor(audio?.currentTime ?? currentTime.value), 'paused')

@@ -172,6 +172,33 @@ describe('persistent local audio player', () => {
     await vi.waitFor(() => expect(playbackServices.updatePlaybackHistory).toHaveBeenLastCalledWith(101, 26, 11, 'paused'))
   })
 
+  it('saves the final listened interval when the pause event arrives after state changes', async () => {
+    const player = usePlayerStore()
+    const audio = makeAudio()
+    attach(player, audio)
+    await player.playQueue([firstTrack])
+
+    audio.currentTime = 8
+    audio.paused = true
+    player.pause()
+    audio.dispatchEvent(new Event('pause'))
+
+    await vi.waitFor(() => expect(playbackServices.updatePlaybackHistory).toHaveBeenLastCalledWith(101, 8, 8, 'paused'))
+  })
+
+  it('saves the final listened interval when the audio host fails', async () => {
+    const player = usePlayerStore()
+    const audio = makeAudio()
+    attach(player, audio)
+    await player.playQueue([firstTrack])
+
+    audio.currentTime = 8
+    audio.error = { code: 3 } as MediaError
+    audio.dispatchEvent(new Event('error'))
+
+    await vi.waitFor(() => expect(playbackServices.updatePlaybackHistory).toHaveBeenLastCalledWith(101, 8, 8, 'failed'))
+  })
+
   it('autoplays the next track when the current track ends', async () => {
     const player = usePlayerStore()
     const audio = makeAudio()
