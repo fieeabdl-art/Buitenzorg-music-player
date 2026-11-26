@@ -84,8 +84,9 @@ export const useProvidersStore = defineStore('providers', () => {
     actionError.value = ''
     try {
       youtubeStatus.value = await youtubeAdapter.checkConnection()
-      actionError.value = youtubeStatus.value.message
-      return youtubeStatus.value.state === 'connected'
+      const connected = youtubeStatus.value.state === 'connected'
+      actionError.value = connected ? '' : youtubeStatus.value.message
+      return connected
     } catch (error) {
       actionError.value = errorMessage(error)
       return false
@@ -105,6 +106,7 @@ export const useProvidersStore = defineStore('providers', () => {
       return
     }
     if (!isTauri()) {
+      isSearchingYoutube.value = false
       youtubeResults.value = {
         query: normalizedQuery,
         state: 'unavailable',
@@ -149,6 +151,7 @@ export const useProvidersStore = defineStore('providers', () => {
   }
 
   async function openYoutubeSource(video: YouTubeVideo): Promise<boolean> {
+    actionError.value = ''
     try {
       await youtubeAdapter.openSource(video)
       return true

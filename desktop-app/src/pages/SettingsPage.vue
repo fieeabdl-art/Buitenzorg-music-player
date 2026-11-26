@@ -4,9 +4,11 @@ import { computed, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useLibraryStore } from '../stores/library'
+import { useProvidersStore } from '../stores/providers'
 
 const appStore = useAppStore()
 const library = useLibraryStore()
+const providers = useProvidersStore()
 const libraryValue = computed(() => {
   if (appStore.bridgeState === 'browser') return 'Desktop app only'
   if (appStore.bridgeState === 'error') return 'Unavailable'
@@ -20,11 +22,20 @@ const storageValue = computed(() => {
   if (!library.storageInfo) return library.storageError ? 'Unavailable' : 'Loading'
   return `${formatBytes(library.storageInfo.storageBytes)} · ${library.storageInfo.trackCount} tracks`
 })
+const musicSourcesValue = computed(() => {
+  if (appStore.bridgeState === 'browser') return 'Desktop app only'
+  if (appStore.bridgeState === 'error') return 'Unavailable'
+  if (!providers.youtubeStatus) return appStore.bridgeState === 'ready' ? 'Loading' : 'Not connected'
+  return `YouTube · ${providers.youtubeStatus.state}`
+})
 
 watch(
   () => appStore.bridgeState,
   (state) => {
-    if (state === 'ready') void library.loadStorageInfo()
+    if (state === 'ready') {
+      void library.loadStorageInfo()
+      void providers.loadYoutubeStatus()
+    }
   },
   { immediate: true },
 )
@@ -64,8 +75,8 @@ function formatBytes(bytes: number): string {
       </RouterLink>
       <RouterLink class="settings-row" :to="{ name: 'discover' }">
         <Compass :size="19" aria-hidden="true" />
-        <span><strong>Music sources</strong><small>Only supported, official connections are shown.</small></span>
-        <span class="settings-value">Unavailable</span>
+        <span><strong>Music sources</strong><small>YouTube search uses an official API; no downloads are enabled.</small></span>
+        <span class="settings-value">{{ musicSourcesValue }}</span>
       </RouterLink>
       <RouterLink class="settings-row" :to="{ name: 'downloads' }">
         <Download :size="19" aria-hidden="true" />
@@ -84,6 +95,6 @@ function formatBytes(bytes: number): string {
       </RouterLink>
     </section>
 
-    <p class="settings-footnote">Profile editing and provider connections are not available yet. Library metadata and audio copies stay on this device; no listening data is sent to an online account.</p>
+    <p class="settings-footnote">Local library metadata, audio copies, and listening history stay on this device. YouTube searches send the search terms to YouTube; no local listening data is sent.</p>
   </div>
 </template>

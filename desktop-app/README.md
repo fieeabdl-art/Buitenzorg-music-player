@@ -1,6 +1,6 @@
 # Buitenzorg Player desktop app
 
-Tauri 2 + Vue 3 + TypeScript + Vite + Tailwind CSS + Pinia + Lucide Icons. The selected Stillpoint Chamber interface connects to a versioned local SQLite database and includes managed local audio playback. Profile editing, provider connections, and downloads are not implemented yet.
+Tauri 2 + Vue 3 + TypeScript + Vite + Tailwind CSS + Pinia + Lucide Icons. The selected Stillpoint Chamber interface connects to a versioned local SQLite database and includes managed local audio playback plus optional YouTube Data API v3 search. Local profile editing, YouTube playback, and downloads are not implemented.
 
 ## Requirements
 
@@ -95,6 +95,13 @@ npm run tauri:build
 - Playlists support local create, rename, delete, track add/remove, and ordering. Search checks actual local title, artist, album, and source filename metadata; it does not query any online provider.
 - SQLite migrations and file operations are owned by Rust commands. The frontend receives records and import reports through Tauri IPC; it has no filesystem or shell capability. Provider credentials are not stored in SQLite.
 
+## YouTube search
+
+- Open **Discover** to save, verify, or remove a user-supplied YouTube Data API v3 key. The key is stored in the operating system credential store and is never displayed again after saving.
+- YouTube searches send the entered query to the official provider API. Local library contents, profile data, and listening history are not sent.
+- Search results show provider metadata and open the official YouTube watch page in the system browser. Results are not imported as local tracks; this feature does not embed playback or download audio.
+- Provider search requires an active internet connection, a valid key with YouTube Data API v3 enabled, and available API quota. Provider errors and quota limits are shown rather than replaced with sample results.
+
 ## Local playback
 
 - The root application owns exactly one HTML5 Audio element. `PlayerStore` keeps it alive across route changes and owns the queue, playback status, position, volume, mute, shuffle, repeat, and history updates.
@@ -107,7 +114,7 @@ npm run tauri:build
 ## Security and current scope
 
 - The Tauri capability grants only core event listen/unlisten permissions required by the app-ready bridge; filesystem and shell permissions are not enabled.
-- One persistent HTML5 audio engine is connected to local managed files through the restricted loopback range server; there is no direct streaming provider or YouTube playback integration yet.
+- One persistent HTML5 audio engine is connected to local managed files through the restricted loopback range server; YouTube results do not enter this playback engine.
 - SQLite local library, managed imports, read-only legacy migration, playlist editing, local search, playback controls, and playback history are implemented. Local profile creation/editing is not implemented yet.
-- No provider is connected and no provider results are fabricated. Downloads are disabled; unknown or denied rights must not be queued. YouTube is not an authorized offline-download source in this app.
+- YouTube search is available only through the user's configured official API key; provider results are never fabricated. Downloads are disabled; unknown or denied rights must not be queued. YouTube is not an authorized offline-download source in this app.
 - No music samples are shipped or shown as user content; synthetic items existed only in the design-selection previews.
