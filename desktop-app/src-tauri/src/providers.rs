@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use keyring::Entry;
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, RequestBuilder, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{Database, StoredProviderStatus};
@@ -274,16 +274,13 @@ impl YouTubeProvider {
     max_results: u8,
   ) -> impl std::future::Future<Output = Result<SearchListResponse, ProviderFailure>> + 'a {
     async move {
-      let response = self
-        .client
-        .get(&self.search_endpoint)
+      let response = youtube_request(&self.client, &self.search_endpoint, api_key)
         .query(&[
           ("part", "snippet"),
           ("q", query),
           ("type", "video"),
           ("videoEmbeddable", "true"),
           ("maxResults", &max_results.to_string()),
-          ("key", api_key),
         ])
         .send()
         .await
@@ -293,10 +290,8 @@ impl YouTubeProvider {
   }
 
   async fn fetch_durations(&self, video_ids: &str, api_key: &str) -> Result<std::collections::HashMap<String, u64>, ProviderFailure> {
-    let response = self
-      .client
-      .get(&self.videos_endpoint)
-      .query(&[("part", "contentDetails"), ("id", video_ids), ("key", api_key)])
+    let response = youtube_request(&self.client, &self.videos_endpoint, api_key)
+      .query(&[("part", "contentDetails"), ("id", video_ids)])
       .send()
       .await
       .map_err(ProviderFailure::from_request)?;
@@ -373,6 +368,10 @@ impl YouTubeProvider {
       message: message.to_owned(),
     }
   }
+}
+
+fn youtube_request(client: &Client, endpoint: &str, api_key: &str) -> RequestBuilder {
+  client.get(endpoint).header("x-goog-api-key", api_key)
 }
 
 fn status_from_storage(stored: Option<StoredProviderStatus>, has_api_key: bool) -> ProviderStatus {
@@ -600,7 +599,7 @@ mod tests {
   use std::path::Path;
   use std::sync::Arc;
 
-  use super::{FailureKind, ProviderFailure, ProviderState, SearchState, SystemCredentialStore, YouTubeProvider};
+  use super::{FailureKind, ProviderFailure, ProviderState, SearchState, SystemCredentialStore, YouTubeProvider, youtube_request};
   use crate::db::Database;
 
   #[test]
@@ -613,5 +612,20 @@ mod tests {
     assert_eq!(response.state, SearchState::InvalidKey);
     assert_eq!(response.provider_status.state, ProviderState::Unavailable);
     assert!(response.provider_status.has_api_key);
+  }
+
+  #[test]
+  fn api_key_is_sent_in_header_not_query_string() {
+    let request = youtube_request(
+      &reqwest::Client::new(),
+      "https://youtube.googleapis.com/youtube/v3/search",
+      "test-only-key",
+    )
+    .query(&[("q", "local test")])
+    .build()
+    .unwrap();
+
+    assert_eq!(request.headers().get("x-goog-api-key").unwrap().to_str().unwrap(), "test-only-key");
+    assert!(request.url().query_pairs().all(|(name, _)| name != "key"));
   }
 }
