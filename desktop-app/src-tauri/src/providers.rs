@@ -496,14 +496,26 @@ impl ProviderFailure {
   }
 
   fn from_status(status: StatusCode, body: GoogleErrorResponse) -> Self {
-    let reason = body.error.and_then(|error| error.errors.into_iter().next().map(|detail| detail.reason));
-    let kind = match reason.as_deref() {
-      Some("quotaExceeded" | "dailyLimitExceeded" | "rateLimitExceeded" | "userRateLimitExceeded") => FailureKind::QuotaExceeded,
-      Some("keyInvalid" | "accessNotConfigured" | "ipRefererBlocked" | "keyExpired") => FailureKind::InvalidKey,
-      _ if status == StatusCode::TOO_MANY_REQUESTS => FailureKind::QuotaExceeded,
-      _ if status == StatusCode::UNAUTHORIZED => FailureKind::InvalidKey,
-      _ if status.is_server_error() => FailureKind::Network,
-      _ => FailureKind::Provider,
+    let reasons = body
+      .error
+      .map(|error| error.errors.into_iter().chain(error.details).map(|detail| detail.reason).collect::<Vec<_>>())
+      .unwrap_or_default();
+    let kind = if reasons.iter().any(|reason| {
+      matches!(reason.as_str(), "quotaExceeded" | "dailyLimitExceeded" | "rateLimitExceeded" | "userRateLimitExceeded")
+    }) {
+      FailureKind::QuotaExceeded
+    } else if reasons.iter().any(|reason| {
+      matches!(reason.as_str(), "keyInvalid" | "accessNotConfigured" | "ipRefererBlocked" | "keyExpired" | "API_KEY_INVALID")
+    }) {
+      FailureKind::InvalidKey
+    } else if status == StatusCode::TOO_MANY_REQUESTS {
+      FailureKind::QuotaExceeded
+    } else if status == StatusCode::UNAUTHORIZED {
+      FailureKind::InvalidKey
+    } else if status.is_server_error() {
+      FailureKind::Network
+    } else {
+      FailureKind::Provider
     };
     Self { kind }
   }
@@ -518,10 +530,13 @@ struct GoogleErrorResponse {
 struct GoogleError {
   #[serde(default)]
   errors: Vec<GoogleErrorDetail>,
+  #[serde(default)]
+  details: Vec<GoogleErrorDetail>,
 }
 
 #[derive(Deserialize)]
 struct GoogleErrorDetail {
+  #[serde(default)]
   reason: String,
 }
 
@@ -599,7 +614,10 @@ mod tests {
   use std::path::Path;
   use std::sync::Arc;
 
-  use super::{FailureKind, ProviderFailure, ProviderState, SearchState, SystemCredentialStore, YouTubeProvider, youtube_request};
+  use super::{
+    FailureKind, GoogleErrorResponse, ProviderFailure, ProviderState, SearchState, StatusCode, SystemCredentialStore,
+    YouTubeProvider, youtube_request,
+  };
   use crate::db::Database;
 
   #[test]
@@ -627,5 +645,16 @@ mod tests {
 
     assert_eq!(request.headers().get("x-goog-api-key").unwrap().to_str().unwrap(), "test-only-key");
     assert!(request.url().query_pairs().all(|(name, _)| name != "key"));
+  }
+
+  #[test]
+  fn api_key_invalid_errorinfo_is_classified_as_invalid_key() {
+    let response: GoogleErrorResponse = serde_json::from_str(
+      r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","errors":[{"reason":"badRequest"}],"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID","domain":"googleapis.com"},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"en-US","message":"API key not valid. Please pass a valid API key."}]}}"#,
+    )
+    .unwrap();
+    let failure = ProviderFailure::from_status(StatusCode::BAD_REQUEST, response);
+
+    assert!(matches!(failure.kind, FailureKind::InvalidKey));
   }
 }
