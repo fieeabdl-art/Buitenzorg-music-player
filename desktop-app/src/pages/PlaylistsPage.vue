@@ -5,6 +5,8 @@ import { RouterLink } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useLibraryStore } from '../stores/library'
 import { toPlayerTrack } from '../services/audioPlayback'
+import TrackArtwork from '../components/TrackArtwork.vue'
+import { trackMetadataSummary } from '../services/trackMetadata'
 import { usePlayerStore } from '../stores/player'
 import PageState from './PageState.vue'
 
@@ -177,7 +179,8 @@ function playPlaylist(trackId?: number): void {
         <ol v-if="library.playlistTracks.length" class="playlist-track-list">
           <li v-for="(track, index) in library.playlistTracks" :key="track.id">
             <span class="playlist-track-list__position">{{ String(index + 1).padStart(2, '0') }}</span>
-            <span class="playlist-track-list__copy"><strong>{{ track.title }}</strong><small>{{ track.artist }} · {{ track.album }} · {{ track.format.toUpperCase() }}</small></span>
+            <TrackArtwork :artwork-url="track.artworkUrl" />
+            <span class="playlist-track-list__copy"><strong>{{ track.title }}</strong><small>{{ track.artist }} · {{ track.album }} · {{ track.format.toUpperCase() }}</small><small v-if="trackMetadataSummary(track)">{{ trackMetadataSummary(track) }}</small></span>
             <span class="availability-badge" :class="`availability-badge--${track.availability || 'unavailable'}`">{{ track.availability === 'available' ? 'On device' : track.availability === 'missing' ? 'File missing' : 'Unavailable' }}</span>
             <div class="playlist-track-list__actions">
               <button type="button" :aria-label="`Play ${track.title}`" :disabled="track.availability !== 'available'" @click="playPlaylist(track.id)"><Play :size="14" fill="currentColor" aria-hidden="true" /></button>

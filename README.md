@@ -12,6 +12,11 @@ A local-first desktop music library and player. Ubuntu/Linux is the first target
 - Provider search, playback, and download are enabled only when official access and permissions are established.
 - YouTube results are not direct audio URLs or permission to download.
 
+## Metadata lokal dan riwayat
+
+- Metadata tag lokal yang tersedia—termasuk genre, tahun, dan nomor track—disimpan bersama judul, artis, album, dan durasi. Artwork tertanam disimpan di direktori terkelola dan memiliki tampilan fallback jika berkas gambar tidak tersedia.
+- Playlist lokal mendukung CRUD dan pengurutan lagu. Riwayat saat ini menyimpan posisi untuk melanjutkan pemutaran terakhir; daftar riwayat dan penghapusannya belum tersedia.
+
 ## Project
 
 - Desktop application: [`desktop-app/`](desktop-app/README.md)

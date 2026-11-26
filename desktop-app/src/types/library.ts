@@ -13,6 +13,10 @@ export interface LibraryItem {
   availability: 'available' | 'missing' | 'unreadable' | null
   hasArtwork: boolean
   trackCount: number | null
+  genre: string | null
+  year: number | null
+  trackNumber: number | null
+  artworkUrl: string | null
 }
 
 export interface LibraryPage {
@@ -61,4 +65,8 @@ export interface PlaylistTrack {
   durationSeconds: number | null
   position: number
   availability: 'available' | 'missing' | 'unreadable' | null
+  genre: string | null
+  year: number | null
+  trackNumber: number | null
+  artworkUrl: string | null
 }

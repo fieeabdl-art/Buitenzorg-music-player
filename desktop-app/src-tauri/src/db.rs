@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const PAGE_SIZE: usize = 50;
 const INITIAL_SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
+const TRACK_METADATA_SCHEMA: &str = include_str!("../migrations/0002_track_metadata.sql");
 
 #[derive(Clone)]
 pub struct Database {
@@ -25,6 +26,9 @@ pub struct NewTrack {
   pub duration_seconds: Option<i64>,
   pub size_bytes: i64,
   pub artwork_name: Option<String>,
+  pub genre: Option<String>,
+  pub year: Option<i64>,
+  pub track_number: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -47,6 +51,12 @@ pub struct LibraryItem {
   pub availability: Option<String>,
   pub has_artwork: bool,
   pub track_count: Option<i64>,
+  pub genre: Option<String>,
+  pub year: Option<i64>,
+  pub track_number: Option<i64>,
+  pub artwork_url: Option<String>,
+  #[serde(skip_serializing)]
+  pub(crate) artwork_name: Option<String>,
   #[serde(skip_serializing)]
   pub(crate) stored_name: Option<String>,
 }
@@ -84,6 +94,12 @@ pub struct PlaylistTrack {
   pub duration_seconds: Option<i64>,
   pub position: i64,
   pub availability: Option<String>,
+  pub genre: Option<String>,
+  pub year: Option<i64>,
+  pub track_number: Option<i64>,
+  pub artwork_url: Option<String>,
+  #[serde(skip_serializing)]
+  pub(crate) artwork_name: Option<String>,
   #[serde(skip_serializing)]
   pub(crate) stored_name: String,
 }
@@ -97,6 +113,12 @@ pub struct PlaybackTrack {
   pub album: String,
   pub format: String,
   pub duration_seconds: Option<i64>,
+  pub genre: Option<String>,
+  pub year: Option<i64>,
+  pub track_number: Option<i64>,
+  pub artwork_url: Option<String>,
+  #[serde(skip_serializing)]
+  pub(crate) artwork_name: Option<String>,
   #[serde(skip_serializing)]
   pub(crate) stored_name: String,
 }
@@ -154,6 +176,18 @@ impl Database {
         .map_err(|error| error.to_string())?;
       transaction.commit().map_err(|error| error.to_string())?;
       current_version = 1;
+    }
+
+    if current_version < 2 {
+      let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+      transaction.execute_batch(TRACK_METADATA_SCHEMA).map_err(|error| error.to_string())?;
+      transaction
+        .pragma_update(None, "user_version", 2_i64)
+        .map_err(|error| error.to_string())?;
+      transaction.commit().map_err(|error| error.to_string())?;
+      current_version = 2;
     }
 
     if current_version != SCHEMA_VERSION {
@@ -220,7 +254,7 @@ impl Database {
     self
       .lock()?
       .query_row(
-        "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name FROM tracks t LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id WHERE t.id = ?1",
+        "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM tracks t LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id WHERE t.id = ?1",
         [track_id],
         |row| {
           Ok(PlaybackTrack {
@@ -231,6 +265,11 @@ impl Database {
             format: row.get(4)?,
             duration_seconds: row.get(5)?,
             stored_name: row.get(6)?,
+            artwork_name: row.get(7)?,
+            genre: row.get(8)?,
+            year: row.get(9)?,
+            track_number: row.get(10)?,
+            artwork_url: None,
           })
         },
       )
@@ -273,7 +312,7 @@ impl Database {
     self
       .lock()?
       .query_row(
-        "SELECT h.id, h.position_seconds, t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name FROM playback_history h JOIN tracks t ON t.id = h.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY h.played_at DESC, h.id DESC LIMIT 1",
+        "SELECT h.id, h.position_seconds, t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM playback_history h JOIN tracks t ON t.id = h.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY h.played_at DESC, h.id DESC LIMIT 1",
         [],
         |row| {
           Ok(PlaybackHistoryEntry {
@@ -287,6 +326,11 @@ impl Database {
               format: row.get(6)?,
               duration_seconds: row.get(7)?,
               stored_name: row.get(8)?,
+              artwork_name: row.get(9)?,
+              genre: row.get(10)?,
+              year: row.get(11)?,
+              track_number: row.get(12)?,
+              artwork_url: None,
             },
           })
         },
@@ -319,7 +363,7 @@ impl Database {
     let album_key = track.album.to_lowercase();
     transaction
       .execute(
-        "INSERT INTO albums (title, title_key, artist_id, artwork_name) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(artist_id, title_key) DO NOTHING",
+        "INSERT INTO albums (title, title_key, artist_id, artwork_name) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(artist_id, title_key) DO UPDATE SET artwork_name = COALESCE(albums.artwork_name, excluded.artwork_name)",
         params![track.album, album_key, artist_id, track.artwork_name],
       )
       .map_err(|error| error.to_string())?;
@@ -333,7 +377,7 @@ impl Database {
 
     transaction
       .execute(
-        "INSERT INTO tracks (title, artist_id, album_id, source_name, stored_name, content_sha256, format, duration_seconds, size_bytes, artwork_name) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO tracks (title, artist_id, album_id, source_name, stored_name, content_sha256, format, duration_seconds, size_bytes, artwork_name, genre, year, track_number) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
           track.title,
           artist_id,
@@ -344,7 +388,10 @@ impl Database {
           track.format,
           track.duration_seconds,
           track.size_bytes,
-          track.artwork_name
+          track.artwork_name,
+          track.genre,
+          track.year,
+          track.track_number
         ],
       )
       .map_err(|error| error.to_string())?;
@@ -397,6 +444,11 @@ impl Database {
               availability: None,
               has_artwork: false,
               track_count: Some(count),
+              genre: None,
+              year: None,
+              track_number: None,
+              artwork_url: None,
+              artwork_name: None,
               stored_name: None,
             })
           })
@@ -412,6 +464,7 @@ impl Database {
         let rows = statement
           .query_map(params![PAGE_SIZE as i64, offset_i64], |row| {
             let count: i64 = row.get(3)?;
+            let artwork_name: Option<String> = row.get(4)?;
             Ok(LibraryItem {
               id: row.get(0)?,
               kind: "album".to_owned(),
@@ -423,8 +476,13 @@ impl Database {
               duration_seconds: None,
               added_at: None,
               availability: None,
-              has_artwork: row.get::<_, Option<String>>(4)?.is_some(),
+              has_artwork: artwork_name.is_some(),
               track_count: Some(count),
+              genre: None,
+              year: None,
+              track_number: None,
+              artwork_url: None,
+              artwork_name,
               stored_name: None,
             })
           })
@@ -433,13 +491,14 @@ impl Database {
       }
       _ => {
         let query = if category == "liked" {
-          "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.size_bytes, t.added_at, t.stored_name, t.artwork_name FROM liked_tracks l JOIN tracks t ON t.id = l.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY l.liked_at DESC LIMIT ?1 OFFSET ?2"
+          "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.size_bytes, t.added_at, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM liked_tracks l JOIN tracks t ON t.id = l.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY l.liked_at DESC LIMIT ?1 OFFSET ?2"
         } else {
-          "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.size_bytes, t.added_at, t.stored_name, t.artwork_name FROM tracks t LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY t.added_at DESC, t.id DESC LIMIT ?1 OFFSET ?2"
+          "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.size_bytes, t.added_at, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM tracks t LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY t.added_at DESC, t.id DESC LIMIT ?1 OFFSET ?2"
         };
         let mut statement = connection.prepare(query).map_err(|error| error.to_string())?;
         let rows = statement
           .query_map(params![PAGE_SIZE as i64, offset_i64], |row| {
+            let artwork_name: Option<String> = row.get(9)?;
             Ok(LibraryItem {
               id: row.get(0)?,
               kind: "track".to_owned(),
@@ -451,8 +510,13 @@ impl Database {
               duration_seconds: row.get(5)?,
               added_at: Some(row.get(7)?),
               availability: None,
-              has_artwork: row.get::<_, Option<String>>(9)?.is_some(),
+              has_artwork: artwork_name.is_some(),
               track_count: None,
+              genre: row.get(10)?,
+              year: row.get(11)?,
+              track_number: row.get(12)?,
+              artwork_url: None,
+              artwork_name,
               stored_name: Some(row.get(8)?),
             })
           })
@@ -507,11 +571,12 @@ impl Database {
     let offset_i64 = i64::try_from(offset).unwrap_or(i64::MAX);
     let mut statement = connection
       .prepare(
-        "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.size_bytes, t.added_at, t.stored_name, t.artwork_name FROM tracks t LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id WHERE instr(lower(t.title), lower(?1)) > 0 OR instr(lower(a.name), lower(?1)) > 0 OR instr(lower(al.title), lower(?1)) > 0 OR instr(lower(t.source_name), lower(?1)) > 0 ORDER BY t.added_at DESC, t.id DESC LIMIT ?2 OFFSET ?3",
+        "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.size_bytes, t.added_at, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM tracks t LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id WHERE instr(lower(t.title), lower(?1)) > 0 OR instr(lower(a.name), lower(?1)) > 0 OR instr(lower(al.title), lower(?1)) > 0 OR instr(lower(t.source_name), lower(?1)) > 0 ORDER BY t.added_at DESC, t.id DESC LIMIT ?2 OFFSET ?3",
       )
       .map_err(|error| error.to_string())?;
     let rows = statement
       .query_map(params![query, PAGE_SIZE as i64, offset_i64], |row| {
+        let artwork_name: Option<String> = row.get(9)?;
         Ok(LibraryItem {
           id: row.get(0)?,
           kind: "track".to_owned(),
@@ -523,8 +588,13 @@ impl Database {
           duration_seconds: row.get(5)?,
           added_at: Some(row.get(7)?),
           availability: None,
-          has_artwork: row.get::<_, Option<String>>(9)?.is_some(),
+          has_artwork: artwork_name.is_some(),
           track_count: None,
+          genre: row.get(10)?,
+          year: row.get(11)?,
+          track_number: row.get(12)?,
+          artwork_url: None,
+          artwork_name,
           stored_name: Some(row.get(8)?),
         })
       })
@@ -572,7 +642,7 @@ impl Database {
     let connection = self.lock()?;
     let mut statement = connection
       .prepare(
-        "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, pt.position, t.stored_name FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id WHERE pt.playlist_id = ?1 ORDER BY pt.position",
+        "SELECT t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, pt.position, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id WHERE pt.playlist_id = ?1 ORDER BY pt.position",
       )
       .map_err(|error| error.to_string())?;
     let rows = statement
@@ -586,6 +656,11 @@ impl Database {
           duration_seconds: row.get(5)?,
           position: row.get(6)?,
           availability: None,
+          artwork_name: row.get(8)?,
+          genre: row.get(9)?,
+          year: row.get(10)?,
+          track_number: row.get(11)?,
+          artwork_url: None,
           stored_name: row.get(7)?,
         })
       })
@@ -771,7 +846,7 @@ fn validate_playlist_fields(name: &str, description: &str) -> Result<(String, St
 
 #[cfg(test)]
 mod tests {
-  use super::{Database, NewTrack};
+  use super::{Database, NewTrack, INITIAL_SCHEMA};
   use rusqlite::Connection;
   use std::fs;
   use std::path::PathBuf;
@@ -798,6 +873,9 @@ mod tests {
       duration_seconds: Some(1),
       size_bytes: 44,
       artwork_name: None,
+      genre: None,
+      year: None,
+      track_number: None,
     }
   }
 
@@ -807,11 +885,11 @@ mod tests {
     let path = directory.join("library.sqlite3");
 
     let database = Database::open(&path).unwrap();
-    assert_eq!(database.schema_version().unwrap(), 1);
+    assert_eq!(database.schema_version().unwrap(), 2);
     drop(database);
 
     let reopened = Database::open(&path).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 1);
+    assert_eq!(reopened.schema_version().unwrap(), 2);
     assert_eq!(reopened.library_page("all", 0).unwrap().total_count, 0);
 
     drop(reopened);
@@ -834,8 +912,40 @@ mod tests {
       .unwrap()
       .query_row("SELECT value FROM preserved_user_data", [], |row| row.get(0))
       .unwrap();
-    assert_eq!(database.schema_version().unwrap(), 1);
+    assert_eq!(database.schema_version().unwrap(), 2);
     assert_eq!(value, "keep");
+
+    drop(database);
+    fs::remove_dir_all(directory).unwrap();
+  }
+
+  #[test]
+  fn version_one_upgrade_preserves_tracks_playlists_and_playback_history() {
+    let directory = test_directory();
+    let path = directory.join("library.sqlite3");
+    {
+      let connection = Connection::open(&path).unwrap();
+      connection.execute_batch(INITIAL_SCHEMA).unwrap();
+      connection.execute("INSERT INTO artists (id, name, name_key) VALUES (1, 'Legacy artist', 'legacy artist')", []).unwrap();
+      connection.execute("INSERT INTO albums (id, title, title_key, artist_id) VALUES (1, 'Legacy album', 'legacy album', 1)", []).unwrap();
+      connection.execute(
+        "INSERT INTO tracks (id, title, artist_id, album_id, source_name, stored_name, content_sha256, format, duration_seconds, size_bytes) VALUES (1, 'Legacy track', 1, 1, 'legacy.wav', ?1, ?2, 'wav', 12, 44)",
+        rusqlite::params![format!("{}.wav", "f".repeat(64)), "f".repeat(64)],
+      ).unwrap();
+      connection.execute("INSERT INTO playlists (id, name) VALUES (1, 'Legacy playlist')", []).unwrap();
+      connection.execute("INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (1, 1, 0)", []).unwrap();
+      connection.execute("INSERT INTO playback_history (id, track_id, position_seconds) VALUES (1, 1, 8)", []).unwrap();
+      connection.pragma_update(None, "user_version", 1_i64).unwrap();
+    }
+
+    let database = Database::open(&path).unwrap();
+    assert_eq!(database.schema_version().unwrap(), 2);
+    let item = &database.library_page("all", 0).unwrap().items[0];
+    assert_eq!(item.title, "Legacy track");
+    assert_eq!(item.genre, None);
+    assert_eq!(item.year, None);
+    assert_eq!(database.playlist_tracks(1).unwrap()[0].title, "Legacy track");
+    assert_eq!(database.latest_playback_history().unwrap().unwrap().position_seconds, 8);
 
     drop(database);
     fs::remove_dir_all(directory).unwrap();
@@ -916,6 +1026,40 @@ mod tests {
     assert_eq!(database.search_library("%' OR 1=1 --", 0).unwrap().total_count, 0);
     assert_eq!(database.search_library("", 0).unwrap().total_count, 0);
     assert!(database.search_library(&"x".repeat(121), 0).is_err());
+  }
+
+  #[test]
+  fn tag_metadata_is_returned_consistently_for_library_search_playlists_and_playback() {
+    let database = Database::open_in_memory().unwrap();
+    let mut track = sample_track(&"e".repeat(64), &format!("{}.wav", "e".repeat(64)), "Tagged track");
+    track.genre = Some("Ambient".to_owned());
+    track.year = Some(2001);
+    track.track_number = Some(7);
+    track.artwork_name = Some(format!("{}.jpg", "a".repeat(64)));
+    let track_id = database.insert_track(&track).unwrap();
+
+    let item = &database.library_page("all", 0).unwrap().items[0];
+    assert_eq!(item.genre.as_deref(), Some("Ambient"));
+    assert_eq!(item.year, Some(2001));
+    assert_eq!(item.track_number, Some(7));
+    assert!(item.has_artwork);
+    assert_eq!(database.search_library("Tagged track", 0).unwrap().items[0].genre.as_deref(), Some("Ambient"));
+
+    let playlist_id = database.create_playlist("Tagged", "").unwrap();
+    database.add_track_to_playlist(playlist_id, track_id).unwrap();
+    let playlist_track = &database.playlist_tracks(playlist_id).unwrap()[0];
+    assert_eq!(playlist_track.genre.as_deref(), Some("Ambient"));
+    assert_eq!(playlist_track.year, Some(2001));
+    assert_eq!(playlist_track.track_number, Some(7));
+    assert_eq!(database.playback_track(track_id).unwrap().unwrap().artwork_name.as_deref(), Some(format!("{}.jpg", "a".repeat(64)).as_str()));
+
+    let mut without_track_art = sample_track(&"c".repeat(64), &format!("{}.wav", "c".repeat(64)), "No track art");
+    without_track_art.artist = track.artist.clone();
+    without_track_art.album = track.album.clone();
+    let without_track_art_id = database.insert_track(&without_track_art).unwrap();
+    let fallback_item = &database.search_library("No track art", 0).unwrap().items[0];
+    assert!(fallback_item.has_artwork);
+    assert_eq!(database.playback_track(without_track_art_id).unwrap().unwrap().artwork_name, track.artwork_name);
   }
 
   #[test]

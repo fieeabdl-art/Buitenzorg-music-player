@@ -77,6 +77,9 @@ struct AudioMetadata {
   title: String,
   artist: String,
   album: String,
+  genre: Option<String>,
+  year: Option<i64>,
+  track_number: Option<i64>,
   duration_seconds: Option<i64>,
   artwork: Option<Vec<u8>>,
 }
@@ -112,7 +115,7 @@ impl LibraryService {
     let artwork_directory = root.join("artwork");
     create_managed_directory(&audio_directory)?;
     create_managed_directory(&artwork_directory)?;
-    let media_server = Arc::new(LocalMediaServer::start(&audio_directory)?);
+    let media_server = Arc::new(LocalMediaServer::start(&audio_directory, &artwork_directory)?);
 
     Ok(Self {
       database: Arc::new(database),
@@ -129,6 +132,7 @@ impl LibraryService {
       if let Some(stored_name) = &item.stored_name {
         item.availability = Some(self.file_availability(stored_name));
       }
+      item.artwork_url = item.artwork_name.as_deref().and_then(|name| self.media_server.url_for_artwork(name).ok());
     }
     Ok(page)
   }
@@ -139,6 +143,7 @@ impl LibraryService {
       if let Some(stored_name) = &item.stored_name {
         item.availability = Some(self.file_availability(stored_name));
       }
+      item.artwork_url = item.artwork_name.as_deref().and_then(|name| self.media_server.url_for_artwork(name).ok());
     }
     Ok(page)
   }
@@ -316,10 +321,11 @@ impl LibraryService {
   }
 
   pub fn resolve_playback_track(&self, track_id: i64) -> Result<ResolvedPlaybackTrack, String> {
-    let track = self.database.playback_track(track_id)?
+    let mut track = self.database.playback_track(track_id)?
       .ok_or_else(|| "Track not found in the local library.".to_owned())?;
     self.playable_audio_path(&track.stored_name)?;
     let audio_url = self.media_server.url_for(&track.stored_name)?;
+    track.artwork_url = track.artwork_name.as_deref().and_then(|name| self.media_server.url_for_artwork(name).ok());
     Ok(ResolvedPlaybackTrack {
       track,
       audio_url,
@@ -335,11 +341,16 @@ impl LibraryService {
   }
 
   pub fn resumable_playback(&self) -> Result<Option<ResumablePlayback>, String> {
-    let Some(entry) = self.database.latest_playback_history()? else {
+    let Some(mut entry) = self.database.latest_playback_history()? else {
       return Ok(None);
     };
     self.playable_audio_path(&entry.track.stored_name)?;
     let audio_url = self.media_server.url_for(&entry.track.stored_name)?;
+    entry.track.artwork_url = entry
+      .track
+      .artwork_name
+      .as_deref()
+      .and_then(|name| self.media_server.url_for_artwork(name).ok());
     Ok(Some(ResumablePlayback {
       history_id: entry.history_id,
       position_seconds: entry.position_seconds,
@@ -356,6 +367,7 @@ impl LibraryService {
     let mut tracks = self.database.playlist_tracks(playlist_id)?;
     for track in &mut tracks {
       track.availability = Some(self.file_availability(&track.stored_name));
+      track.artwork_url = track.artwork_name.as_deref().and_then(|name| self.media_server.url_for_artwork(name).ok());
     }
     Ok(tracks)
   }
@@ -485,6 +497,9 @@ impl LibraryService {
       duration_seconds: metadata.duration_seconds,
       size_bytes: i64::try_from(temporary.size_bytes).unwrap_or(i64::MAX),
       artwork_name,
+      genre: metadata.genre,
+      year: metadata.year,
+      track_number: metadata.track_number,
     };
 
     match self.database.insert_track(&track) {
@@ -629,6 +644,20 @@ struct LegacyFallbacks<'a> {
   album: Option<&'a str>,
 }
 
+fn metadata_from_tag(tag: Option<&lofty::tag::Tag>) -> (Option<String>, Option<i64>, Option<i64>) {
+  let genre = tag
+    .and_then(Accessor::genre)
+    .map(|value| value.into_owned())
+    .map(|value| clean_text(&value, "", 100))
+    .filter(|value| !value.is_empty());
+  let year = tag
+    .and_then(Accessor::date)
+    .map(|date| i64::from(date.year))
+    .filter(|year| (1..=9999).contains(year));
+  let track_number = tag.and_then(Accessor::track).map(i64::from).filter(|number| *number > 0);
+  (genre, year, track_number)
+}
+
 fn read_audio_metadata(path: &Path, fallbacks: Option<LegacyFallbacks<'_>>) -> Result<AudioMetadata, String> {
   let tagged_file = lofty::read_from_path(path)
     .map_err(|_| "The selected file could not be read as a supported audio format.".to_owned())?;
@@ -651,6 +680,7 @@ fn read_audio_metadata(path: &Path, fallbacks: Option<LegacyFallbacks<'_>>) -> R
     .map(|value| value.into_owned())
     .filter(|value| !value.trim().is_empty())
     .unwrap_or_else(|| clean_text(fallback_album, "Local files", 200));
+  let (genre, year, track_number) = metadata_from_tag(tag);
   let artwork = tag
     .and_then(|tag| tag.pictures().iter().find(|picture| image_extension(picture.data()).is_some()))
     .map(|picture| picture.data().to_vec())
@@ -660,6 +690,9 @@ fn read_audio_metadata(path: &Path, fallbacks: Option<LegacyFallbacks<'_>>) -> R
     title: clean_text(&title, "Untitled audio", 200),
     artist: clean_text(&artist, "Unknown artist", 200),
     album: clean_text(&album, "Local files", 200),
+    genre,
+    year,
+    track_number,
     duration_seconds: Some(tagged_file.properties().duration().as_secs().min(i64::MAX as u64) as i64),
     artwork,
   })
@@ -814,6 +847,8 @@ fn image_extension(bytes: &[u8]) -> Option<&'static str> {
     Some("bmp")
   } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
     Some("tiff")
+  } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+    Some("webp")
   } else {
     None
   }
@@ -821,8 +856,10 @@ fn image_extension(bytes: &[u8]) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-  use super::{ImportReport, LibraryService, io_message, sha256_bytes};
+  use super::{ImportReport, LibraryService, io_message, metadata_from_tag, sha256_bytes};
   use crate::db::Database;
+  use lofty::tag::items::Timestamp;
+  use lofty::tag::{Accessor, Tag, TagType};
   use std::fs;
   use std::io;
   use std::path::{Path, PathBuf};
@@ -861,6 +898,21 @@ mod tests {
     bytes.resize(44 + data_length, 128);
     fs::write(path, &bytes).unwrap();
     bytes
+  }
+
+  #[test]
+  fn tag_metadata_omits_missing_or_invalid_values_and_normalizes_genre() {
+    let mut tag = Tag::new(TagType::Id3v2);
+    tag.set_genre("  Ambient   electronic ".to_owned());
+    tag.set_date(Timestamp { year: 2026, month: None, day: None, hour: None, minute: None, second: None });
+    tag.set_track(4);
+    assert_eq!(metadata_from_tag(Some(&tag)), (Some("Ambient electronic".to_owned()), Some(2026), Some(4)));
+
+    tag.set_genre("   ".to_owned());
+    tag.set_date(Timestamp { year: 0, month: None, day: None, hour: None, minute: None, second: None });
+    tag.set_track(0);
+    assert_eq!(metadata_from_tag(Some(&tag)), (None, None, None));
+    assert_eq!(metadata_from_tag(None), (None, None, None));
   }
 
   fn write_legacy_index(root: &Path, source: &Path, bytes: &[u8]) -> String {

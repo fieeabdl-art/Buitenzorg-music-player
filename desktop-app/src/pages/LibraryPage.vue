@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
-import { CircleAlert, Disc3, FileAudio, FolderOpen, HardDrive, LibraryBig, LoaderCircle, Play, Upload } from '@lucide/vue'
+import { CircleAlert, FolderOpen, HardDrive, LibraryBig, LoaderCircle, Play, Upload } from '@lucide/vue'
 import { useAppStore } from '../stores/app'
 import { useLibraryStore } from '../stores/library'
 import { toPlayerTrack } from '../services/audioPlayback'
 import { usePlayerStore } from '../stores/player'
+import TrackArtwork from '../components/TrackArtwork.vue'
+import { trackMetadataSummary } from '../services/trackMetadata'
 import type { LibraryCategory, LibraryItem } from '../types/library'
 import PageState from './PageState.vue'
 
@@ -163,7 +165,7 @@ function playLoadedTracks(): void {
         <thead><tr><th scope="col">Track</th><th scope="col">Album</th><th scope="col">Format</th><th scope="col">Duration</th><th scope="col">Size</th><th scope="col">Availability</th></tr></thead>
         <tbody>
           <tr v-for="item in library.items" :key="item.id">
-            <th scope="row"><span class="library-track-title"><button class="library-track-play" type="button" :aria-label="`Play ${item.title}`" :disabled="item.availability !== 'available'" @click="playItem(item)"><Play :size="14" fill="currentColor" aria-hidden="true" /></button><FileAudio :size="16" aria-hidden="true" /><span>{{ item.title }}<small>{{ item.subtitle }}</small></span></span></th>
+            <th scope="row"><span class="library-track-title"><button class="library-track-play" type="button" :aria-label="`Play ${item.title}`" :disabled="item.availability !== 'available'" @click="playItem(item)"><Play :size="14" fill="currentColor" aria-hidden="true" /></button><TrackArtwork :artwork-url="item.artworkUrl" /><span>{{ item.title }}<small>{{ item.subtitle }}</small><small v-if="trackMetadataSummary(item)">{{ trackMetadataSummary(item) }}</small></span></span></th>
             <td>{{ item.detail || '—' }}</td>
             <td>{{ item.format?.toUpperCase() || '—' }}</td>
             <td>{{ formatDuration(item.durationSeconds) }}</td>
@@ -176,7 +178,7 @@ function playLoadedTracks(): void {
     </section>
     <section v-else class="library-collection" :aria-label="selectedCategory === 'artists' ? 'Artists' : 'Albums'">
       <article v-for="item in library.items" :key="item.id" class="library-collection__item">
-        <span class="library-collection__art" aria-hidden="true"><Disc3 :size="23" :stroke-width="1.5" /></span>
+        <TrackArtwork :artwork-url="item.artworkUrl" />
         <span class="library-collection__copy"><strong>{{ item.title }}</strong><small>{{ item.subtitle }}</small><small v-if="item.detail">{{ item.detail }}</small></span>
         <span v-if="item.hasArtwork" class="state-label">Artwork embedded</span>
       </article>

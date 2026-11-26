@@ -82,6 +82,10 @@ describe('local library store', () => {
         availability: 'available',
         hasArtwork: false,
         trackCount: null,
+        genre: null,
+        year: null,
+        trackNumber: null,
+        artworkUrl: null,
       }],
     })
     const library = useLibraryStore()

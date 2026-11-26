@@ -28,6 +28,10 @@ export function toPlayerTrack(item: LibraryItem | PlaylistTrack): PlayerTrack {
       format: item.format,
       durationSeconds: item.durationSeconds,
       availability: item.availability,
+      genre: item.genre,
+      year: item.year,
+      trackNumber: item.trackNumber,
+      artworkUrl: item.artworkUrl,
     }
   }
   return {
@@ -38,6 +42,10 @@ export function toPlayerTrack(item: LibraryItem | PlaylistTrack): PlayerTrack {
     format: item.format ?? 'unknown',
     durationSeconds: item.durationSeconds,
     availability: item.availability,
+    genre: item.genre,
+    year: item.year,
+    trackNumber: item.trackNumber,
+    artworkUrl: item.artworkUrl,
   }
 }
 

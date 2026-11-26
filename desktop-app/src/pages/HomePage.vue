@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { AlertCircle, ArrowRight, FileAudio, Headphones, LibraryBig, ListMusic, LoaderCircle, Pause, Play } from '@lucide/vue'
+import { AlertCircle, ArrowRight, Headphones, LibraryBig, ListMusic, LoaderCircle, Pause, Play } from '@lucide/vue'
 import { computed, watch } from 'vue'
 import { RouterLink } from 'vue-router'
-import BrandMark from '../components/BrandMark.vue'
+import TrackArtwork from '../components/TrackArtwork.vue'
 import { useAppStore } from '../stores/app'
 import { useLibraryStore } from '../stores/library'
 import { toPlayerTrack } from '../services/audioPlayback'
+import { trackMetadataSummary } from '../services/trackMetadata'
 import { usePlayerStore } from '../stores/player'
 import PageState from './PageState.vue'
 
@@ -60,13 +61,14 @@ function playRecent(trackId: number): void {
 
     <section class="listening-stage" aria-labelledby="listening-title">
       <div class="stage-artwork" aria-hidden="true">
-        <BrandMark />
-        <span>BUITENZORG</span>
+        <TrackArtwork size="hero" :artwork-url="player.currentTrack?.artworkUrl" />
+        <span v-if="!player.currentTrack?.artworkUrl">BUITENZORG</span>
       </div>
       <div class="stage-copy">
         <Headphones class="stage-icon" :size="20" :stroke-width="1.7" aria-hidden="true" />
         <h2 id="listening-title">{{ player.currentTrack?.title ?? 'A little space for your music.' }}</h2>
         <p>{{ player.currentTrack ? `${player.currentTrack.artist} · ${player.currentTrack.album}` : 'Your local collection, ready when you are.' }}</p>
+        <p v-if="player.currentTrack && trackMetadataSummary(player.currentTrack)">{{ trackMetadataSummary(player.currentTrack) }}</p>
         <p v-if="player.error" class="player-error" role="alert">{{ player.error }}</p>
         <button v-if="player.currentTrack" class="primary-link" type="button" :disabled="player.isLoading" @click="player.togglePlayback">
           <Pause v-if="player.isPlaying" :size="17" aria-hidden="true" />
@@ -94,8 +96,8 @@ function playRecent(trackId: number): void {
         <ol v-else class="home-track-list" aria-label="Recently added local tracks">
           <li v-for="track in recentTracks" :key="track.id">
             <button class="library-track-play" type="button" :aria-label="`Play ${track.title}`" :disabled="track.availability !== 'available'" @click="playRecent(track.id)"><Play :size="14" fill="currentColor" aria-hidden="true" /></button>
-            <FileAudio :size="16" aria-hidden="true" />
-            <span><strong>{{ track.title }}</strong><small>{{ track.subtitle }} · {{ track.detail || 'Local files' }}</small></span>
+            <TrackArtwork :artwork-url="track.artworkUrl" />
+            <span><strong>{{ track.title }}</strong><small>{{ track.subtitle }} · {{ track.detail || 'Local files' }}</small><small v-if="trackMetadataSummary(track)">{{ trackMetadataSummary(track) }}</small></span>
             <span class="home-track-list__meta">{{ formatDuration(track.durationSeconds) }}</span>
           </li>
         </ol>

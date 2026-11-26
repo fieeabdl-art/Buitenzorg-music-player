@@ -12,6 +12,7 @@ const MAX_CONNECTIONS: usize = 8;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const AUDIO_EXTENSIONS: &[&str] = &["aac", "aif", "aiff", "flac", "m4a", "mp3", "mp4", "oga", "ogg", "opus", "wav"];
+const ARTWORK_EXTENSIONS: &[&str] = &["bmp", "gif", "jpg", "png", "tiff", "webp"];
 
 pub struct LocalMediaServer {
   address: SocketAddr,
@@ -29,8 +30,9 @@ impl Drop for ConnectionGuard {
 }
 
 impl LocalMediaServer {
-  pub fn start(audio_directory: &Path) -> Result<Self, String> {
+  pub fn start(audio_directory: &Path, artwork_directory: &Path) -> Result<Self, String> {
     let audio_directory = audio_directory.canonicalize().map_err(|error| error.to_string())?;
+    let artwork_directory = artwork_directory.canonicalize().map_err(|error| error.to_string())?;
     let mut random = [0_u8; 32];
     getrandom::fill(&mut random).map_err(|error| format!("Could not create a local media session token: {error}"))?;
     let token = random.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
@@ -52,14 +54,15 @@ impl LocalMediaServer {
                 reject_connection(&mut stream, "503 Service Unavailable");
                 continue;
               }
-              let root = audio_directory.clone();
+              let audio_root = audio_directory.clone();
+              let artwork_root = artwork_directory.clone();
               let expected_token = worker_token.clone();
               let active = active_connections.clone();
               if thread::Builder::new()
                 .name("buitenzorg-media-request".to_owned())
                 .spawn(move || {
                   let _guard = ConnectionGuard(active);
-                  serve_request(stream, &root, &expected_token, address.port());
+                  serve_request(stream, &audio_root, &artwork_root, &expected_token, address.port());
                 })
                 .is_err()
               {
@@ -82,6 +85,13 @@ impl LocalMediaServer {
     }
     Ok(format!("http://127.0.0.1:{}/{}/{}", self.address.port(), self.token, stored_name))
   }
+
+  pub fn url_for_artwork(&self, stored_name: &str) -> Result<String, String> {
+    if !valid_artwork_name(stored_name) {
+      return Err("The managed artwork file name is invalid.".to_owned());
+    }
+    Ok(format!("http://127.0.0.1:{}/{}/artwork/{}", self.address.port(), self.token, stored_name))
+  }
 }
 
 impl Drop for LocalMediaServer {
@@ -93,7 +103,7 @@ impl Drop for LocalMediaServer {
   }
 }
 
-fn serve_request(mut stream: TcpStream, root: &Path, expected_token: &str, port: u16) {
+fn serve_request(mut stream: TcpStream, audio_root: &Path, artwork_root: &Path, expected_token: &str, port: u16) {
   let _ = stream.set_read_timeout(Some(CONNECTION_TIMEOUT));
   let _ = stream.set_write_timeout(Some(CONNECTION_TIMEOUT));
   let (request_line, headers) = match read_headers(&mut stream) {
@@ -133,15 +143,23 @@ fn serve_request(mut stream: TcpStream, root: &Path, expected_token: &str, port:
     return;
   }
 
-  let Some((provided_token, stored_name)) = parse_route(target) else {
+  let Some((provided_token, resource, stored_name)) = parse_route(target) else {
     reject_connection(&mut stream, "404 Not Found");
     return;
   };
-  if !constant_time_eq(provided_token, expected_token) || !valid_stored_name(stored_name) {
+  let valid_name = match resource {
+    MediaResource::Audio => valid_stored_name(stored_name),
+    MediaResource::Artwork => valid_artwork_name(stored_name),
+  };
+  if !constant_time_eq(provided_token, expected_token) || !valid_name {
     reject_connection(&mut stream, "404 Not Found");
     return;
   }
 
+  let root = match resource {
+    MediaResource::Audio => audio_root,
+    MediaResource::Artwork => artwork_root,
+  };
   let path = root.join(stored_name);
   let metadata = match fs::symlink_metadata(&path) {
     Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
@@ -173,7 +191,7 @@ fn serve_request(mut stream: TcpStream, root: &Path, expected_token: &str, port:
     .map(|(start, end)| ("206 Partial Content", start, end))
     .unwrap_or_else(|| ("200 OK", 0, total_length.saturating_sub(1)));
   let content_length = if total_length == 0 { 0 } else { end - start + 1 };
-  let content_type = content_type(stored_name);
+  let content_type = content_type(stored_name, resource);
   let response = if selected_range.is_some() {
     format!(
       "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{end}/{total_length}\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
@@ -216,17 +234,28 @@ fn read_headers(stream: &mut TcpStream) -> Result<(String, Vec<String>), &'stati
   }
 }
 
-fn parse_route(target: &str) -> Option<(&str, &str)> {
+#[derive(Clone, Copy)]
+enum MediaResource {
+  Audio,
+  Artwork,
+}
+
+fn parse_route(target: &str) -> Option<(&str, MediaResource, &str)> {
   if target.chars().any(|character| matches!(character, '?' | '#' | '%')) {
     return None;
   }
   let mut parts = target.strip_prefix('/')?.split('/');
   let token = parts.next()?;
-  let stored_name = parts.next()?;
+  let second = parts.next()?;
+  let (resource, stored_name) = if second == "artwork" {
+    (MediaResource::Artwork, parts.next()?)
+  } else {
+    (MediaResource::Audio, second)
+  };
   if parts.next().is_some() || token.is_empty() || stored_name.is_empty() {
     return None;
   }
-  Some((token, stored_name))
+  Some((token, resource, stored_name))
 }
 
 fn valid_stored_name(stored_name: &str) -> bool {
@@ -234,6 +263,14 @@ fn valid_stored_name(stored_name: &str) -> bool {
   hash.len() == 64
     && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     && AUDIO_EXTENSIONS.contains(&extension)
+    && Path::new(stored_name).file_name().and_then(|name| name.to_str()) == Some(stored_name)
+}
+
+fn valid_artwork_name(stored_name: &str) -> bool {
+  let Some((hash, extension)) = stored_name.rsplit_once('.') else { return false };
+  hash.len() == 64
+    && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    && ARTWORK_EXTENSIONS.contains(&extension)
     && Path::new(stored_name).file_name().and_then(|name| name.to_str()) == Some(stored_name)
 }
 
@@ -265,15 +302,21 @@ fn parse_range(value: &str, total_length: u64) -> Result<(u64, u64), ()> {
   Ok((start, end))
 }
 
-fn content_type(stored_name: &str) -> &'static str {
+fn content_type(stored_name: &str, resource: MediaResource) -> &'static str {
   match stored_name.rsplit_once('.').map(|(_, extension)| extension).unwrap_or_default() {
-    "aac" => "audio/aac",
-    "aif" | "aiff" => "audio/aiff",
-    "flac" => "audio/flac",
-    "m4a" | "mp4" => "audio/mp4",
-    "mp3" => "audio/mpeg",
-    "oga" | "ogg" | "opus" => "audio/ogg",
-    "wav" => "audio/wav",
+    "bmp" if matches!(resource, MediaResource::Artwork) => "image/bmp",
+    "gif" if matches!(resource, MediaResource::Artwork) => "image/gif",
+    "jpg" if matches!(resource, MediaResource::Artwork) => "image/jpeg",
+    "png" if matches!(resource, MediaResource::Artwork) => "image/png",
+    "tiff" if matches!(resource, MediaResource::Artwork) => "image/tiff",
+    "webp" if matches!(resource, MediaResource::Artwork) => "image/webp",
+    "aac" if matches!(resource, MediaResource::Audio) => "audio/aac",
+    "aif" | "aiff" if matches!(resource, MediaResource::Audio) => "audio/aiff",
+    "flac" if matches!(resource, MediaResource::Audio) => "audio/flac",
+    "m4a" | "mp4" if matches!(resource, MediaResource::Audio) => "audio/mp4",
+    "mp3" if matches!(resource, MediaResource::Audio) => "audio/mpeg",
+    "oga" | "ogg" | "opus" if matches!(resource, MediaResource::Audio) => "audio/ogg",
+    "wav" if matches!(resource, MediaResource::Audio) => "audio/wav",
     _ => "application/octet-stream",
   }
 }
@@ -336,8 +379,14 @@ mod tests {
   fn serves_only_authenticated_managed_files_with_byte_ranges() {
     let root = test_directory();
     let filename = format!("{}.wav", "a".repeat(64));
-    fs::write(root.join(&filename), b"abcdefghij").unwrap();
-    let server = LocalMediaServer::start(&root).unwrap();
+    let audio_root = root.join("audio");
+    let artwork_root = root.join("artwork");
+    fs::create_dir_all(&audio_root).unwrap();
+    fs::create_dir_all(&artwork_root).unwrap();
+    fs::write(audio_root.join(&filename), b"abcdefghij").unwrap();
+    let artwork_name = format!("{}.png", "b".repeat(64));
+    fs::write(artwork_root.join(&artwork_name), b"artwork").unwrap();
+    let server = LocalMediaServer::start(&audio_root, &artwork_root).unwrap();
     let url = server.url_for(&filename).unwrap();
 
     let partial = request(&url, "GET", Some("bytes=2-5"));
@@ -351,6 +400,12 @@ mod tests {
 
     let invalid_range = request(&url, "GET", Some("bytes=10-"));
     assert!(invalid_range.starts_with("HTTP/1.1 416 Range Not Satisfiable\r\n"));
+
+    let artwork_url = server.url_for_artwork(&artwork_name).unwrap();
+    let artwork = request(&artwork_url, "GET", None);
+    assert!(artwork.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(artwork.contains("Content-Type: image/png\r\n"));
+    assert!(artwork.ends_with("artwork"));
 
     let wrong_token = url.replace(&server.token, &"0".repeat(server.token.len()));
     assert!(request(&wrong_token, "GET", None).starts_with("HTTP/1.1 404 Not Found\r\n"));
@@ -372,7 +427,9 @@ mod tests {
     let filename = format!("{}.wav", "c".repeat(64));
     #[cfg(unix)]
     std::os::unix::fs::symlink(&outside, audio.join(&filename)).unwrap();
-    let server = LocalMediaServer::start(&audio).unwrap();
+    let artwork = audio.join("artwork");
+    fs::create_dir(&artwork).unwrap();
+    let server = LocalMediaServer::start(&audio, &artwork).unwrap();
     let url = server.url_for(&filename).unwrap();
 
     assert!(request(&url, "GET", None).starts_with("HTTP/1.1 404 Not Found\r\n"));

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ListMusic, LoaderCircle, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from '@lucide/vue'
 import { computed } from 'vue'
-import BrandMark from './BrandMark.vue'
+import TrackArtwork from './TrackArtwork.vue'
 import { usePlayerStore } from '../stores/player'
+import { trackMetadataSummary } from '../services/trackMetadata'
 
 const player = usePlayerStore()
 const canControl = computed(() => player.currentTrack !== null && !player.isLoading)
@@ -30,7 +31,7 @@ function changeVolume(event: Event) {
       <ol v-else>
         <li v-for="(track, index) in player.queue" :key="`${track.id}-${index}`" :class="{ 'player-queue__item--current': index === player.queueIndex }">
           <button type="button" :aria-current="index === player.queueIndex ? 'true' : undefined" @click="player.playQueue(player.queue, index)">
-            <span><strong>{{ track.title }}</strong><small>{{ track.artist }} · {{ track.album }}</small></span>
+            <span><strong>{{ track.title }}</strong><small>{{ track.artist }} · {{ track.album }}</small><small v-if="trackMetadataSummary(track)">{{ trackMetadataSummary(track) }}</small></span>
             <span>{{ index === player.queueIndex ? (player.isPlaying ? 'Playing' : 'Current') : '' }}</span>
           </button>
         </li>
@@ -38,10 +39,11 @@ function changeVolume(event: Event) {
     </section>
 
     <div class="player-track">
-      <div class="player-artwork" aria-hidden="true"><BrandMark /></div>
+      <TrackArtwork size="player" :artwork-url="player.currentTrack?.artworkUrl" />
       <div class="player-track__copy">
         <strong>{{ player.currentTrack?.title ?? 'No track selected' }}</strong>
         <span>{{ player.currentTrack ? `${player.currentTrack.artist} · ${player.currentTrack.album}` : 'Choose a track from your local library' }}</span>
+        <span v-if="player.currentTrack && trackMetadataSummary(player.currentTrack)">{{ trackMetadataSummary(player.currentTrack) }}</span>
         <span v-if="player.error" class="player-error" role="alert">{{ player.error }}</span>
         <span v-else-if="player.historyWarning" class="player-error" role="status">{{ player.historyWarning }}</span>
       </div>
