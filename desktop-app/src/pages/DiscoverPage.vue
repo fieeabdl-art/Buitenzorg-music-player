@@ -20,8 +20,10 @@ watch(
 async function saveApiKey(): Promise<void> {
   feedback.value = ''
   const saved = await providers.saveYoutubeApiKey(apiKey.value)
-  apiKey.value = ''
-  if (saved) feedback.value = 'API key saved in the operating system credential store.'
+  if (saved) {
+    apiKey.value = ''
+    feedback.value = 'API key saved in the operating system credential store.'
+  }
 }
 
 async function checkConnection(): Promise<void> {
