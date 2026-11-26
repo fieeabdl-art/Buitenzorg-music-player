@@ -5,8 +5,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 import { useLibraryStore } from '../stores/library'
 import { useProvidersStore } from '../stores/providers'
-import { toPlayerTrack } from '../services/audioPlayback'
+import { toPlayerTrack, toYouTubePlayerTrack } from '../services/audioPlayback'
 import TrackArtwork from '../components/TrackArtwork.vue'
+import YouTubeResults from '../components/YouTubeResults.vue'
 import { trackMetadataSummary } from '../services/trackMetadata'
 import { usePlayerStore } from '../stores/player'
 import type { LibraryItem } from '../types/library'
@@ -87,10 +88,6 @@ function formatDuration(seconds: number | null): string {
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`
 }
 
-function formatYouTubeDuration(seconds: number | null): string {
-  if (seconds === null || !Number.isFinite(seconds)) return 'Duration unavailable'
-  return formatDuration(seconds)
-}
 
 function availabilityLabel(item: LibraryItem): string {
   if (item.availability === 'missing') return 'File missing'
@@ -110,8 +107,11 @@ function playItem(item: LibraryItem): void {
   if (index >= 0) void player.playQueue(tracks, index)
 }
 
-function openYoutubeResult(video: YouTubeVideo): void {
-  void providers.openYoutubeSource(video)
+function playYoutubeResult(video: YouTubeVideo): void {
+  const videos = providers.youtubeResults?.items ?? [video]
+  const tracks = videos.map(toYouTubePlayerTrack)
+  const index = tracks.findIndex((track) => track.videoId === video.videoId)
+  if (index >= 0) void player.playQueue(tracks, index)
 }
 </script>
 
@@ -186,7 +186,7 @@ function openYoutubeResult(video: YouTubeVideo): void {
         <PageState :icon="AlertCircle" title="YouTube search is unavailable" :description="appStore.bridgeError || 'The desktop provider connection did not start.'" state="error" />
       </section>
       <section v-else-if="!submittedQuery" class="content-region">
-        <PageState :icon="Search" title="Search YouTube videos" description="Enter a title, artist, or video query. Results open through YouTube’s official page." />
+        <PageState :icon="Search" title="Search YouTube videos" description="Enter a title, artist, or video query. Results play in the official embedded player." />
       </section>
       <section v-else-if="providers.isSearchingYoutube" class="content-region">
         <PageState :icon="LoaderCircle" title="Searching YouTube" description="Looking for matching videos through the official API." state="loading" />
@@ -207,18 +207,9 @@ function openYoutubeResult(video: YouTubeVideo): void {
         <PageState :icon="AlertCircle" title="YouTube search is unavailable" :description="providers.youtubeResults.message || 'The provider could not complete this search.'" state="error" action-label="Review music sources" action-to="/discover" />
       </section>
       <section v-else-if="providers.youtubeResults?.state === 'ready'" class="provider-results" aria-label="YouTube search results">
-        <ul>
-          <li v-for="video in providers.youtubeResults.items" :key="video.videoId">
-            <div class="provider-result-copy">
-              <h2>{{ video.title }}</h2>
-              <p>{{ video.artist || 'YouTube channel' }} · {{ formatYouTubeDuration(video.durationSeconds) }}</p>
-              <p v-if="video.description" class="provider-result-description">{{ video.description }}</p>
-            </div>
-            <button class="secondary-button" type="button" @click="openYoutubeResult(video)">Open on YouTube</button>
-          </li>
-        </ul>
+        <YouTubeResults :videos="providers.youtubeResults.items" @play="playYoutubeResult" />
         <p v-if="providers.actionError" class="provider-feedback provider-feedback--error" role="alert">{{ providers.actionError }}</p>
-        <p class="provider-help">YouTube videos are not added to your local library and cannot be downloaded here.</p>
+        <p class="provider-help">YouTube playback uses the official embedded player. YouTube videos are not added to your local library or available for download here.</p>
       </section>
     </template>
   </div>

@@ -12,7 +12,7 @@ const app = useAppStore()
 const history = useHistoryStore()
 const player = usePlayerStore()
 const confirmClear = ref(false)
-const hasClearableEntries = computed(() => history.entries.some((entry) => entry.status !== 'playing' && entry.status !== 'paused'))
+const hasClearableEntries = computed(() => history.entries.some((entry) => !['loading', 'playing', 'paused'].includes(entry.status)))
 
 watch(
   () => app.bridgeState,
@@ -40,6 +40,7 @@ function formatPlayedAt(value: string): string {
 
 function statusLabel(status: PlaybackHistoryStatus): string {
   const labels: Record<PlaybackHistoryStatus, string> = {
+    loading: 'Loading',
     playing: 'Playing',
     paused: 'Paused',
     completed: 'Completed',
@@ -114,7 +115,7 @@ function cancelClear(): void {
           <span class="history-status" :class="`history-status--${entry.status}`">{{ statusLabel(entry.status) }}</span>
           <span class="history-row__actions">
             <button class="secondary-button" type="button" :disabled="entry.track.availability !== 'available'" :aria-label="`Play ${entry.track.title}`" @click="play(entry)"><Play :size="14" fill="currentColor" aria-hidden="true" />Play</button>
-            <button class="quiet-button quiet-button--danger" type="button" :disabled="entry.status === 'playing' || entry.status === 'paused'" :aria-label="`Remove ${entry.track.title} from history`" :title="entry.status === 'playing' || entry.status === 'paused' ? 'Stop or pause the session before removing it' : 'Remove from history'" @click="history.removeEntry(entry.historyId)"><Trash2 :size="15" aria-hidden="true" />Remove</button>
+            <button class="quiet-button quiet-button--danger" type="button" :disabled="['loading', 'playing', 'paused'].includes(entry.status)" :aria-label="`Remove ${entry.track.title} from history`" :title="['loading', 'playing', 'paused'].includes(entry.status) ? 'Stop the active session before removing it' : 'Remove from history'" @click="history.removeEntry(entry.historyId)"><Trash2 :size="15" aria-hidden="true" />Remove</button>
           </span>
         </li>
       </ol>

@@ -5,6 +5,7 @@ import DownloadsPage from '../pages/DownloadsPage.vue'
 import HomePage from '../pages/HomePage.vue'
 import HistoryPage from '../pages/HistoryPage.vue'
 import LibraryPage from '../pages/LibraryPage.vue'
+import NowPlayingPage from '../pages/NowPlayingPage.vue'
 import PlaylistsPage from '../pages/PlaylistsPage.vue'
 import ProfilePage from '../pages/ProfilePage.vue'
 import SearchPage from '../pages/SearchPage.vue'
@@ -14,6 +15,7 @@ export const routes = [
   { path: '/', name: 'home', component: HomePage, meta: { title: 'Listen' } },
   { path: '/discover', name: 'discover', component: DiscoverPage, meta: { title: 'Discover' } },
   { path: '/search', name: 'search', component: SearchPage, meta: { title: 'Search' } },
+  { path: '/now-playing', name: 'now-playing', component: NowPlayingPage, meta: { title: 'Now playing' } },
   { path: '/library', name: 'library', component: LibraryPage, meta: { title: 'Library' } },
   { path: '/playlists', name: 'playlists', component: PlaylistsPage, meta: { title: 'Playlists' } },
   { path: '/history', name: 'history', component: HistoryPage, meta: { title: 'History' } },

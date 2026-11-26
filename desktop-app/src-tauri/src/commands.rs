@@ -6,7 +6,6 @@ use crate::events;
 use crate::db::{LibraryPage, PlaylistSummary, PlaylistTrack};
 use crate::library::{ImportReport, LibraryService, LibraryStorageInfo, ResolvedPlaybackTrack, ResumablePlayback};
 use crate::providers::{ProviderStatus, YouTubeProvider, YouTubeSearchResponse};
-use tauri_plugin_opener::OpenerExt;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,6 +130,29 @@ pub async fn start_playback_history(state: State<'_, LibraryService>, track_id: 
 }
 
 #[tauri::command]
+pub async fn start_youtube_playback_history(
+  state: State<'_, LibraryService>,
+  video_id: String,
+  title: String,
+  artist: String,
+  artwork_url: Option<String>,
+  duration_seconds: Option<i64>,
+) -> Result<i64, String> {
+  let library = state.inner().clone();
+  tauri::async_runtime::spawn_blocking(move || {
+    library.start_youtube_playback_history(
+      &video_id,
+      &title,
+      &artist,
+      artwork_url.as_deref(),
+      duration_seconds,
+    )
+  })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 pub async fn update_playback_history(
   state: State<'_, LibraryService>,
   history_id: i64,
@@ -227,19 +249,6 @@ pub async fn search_youtube(
     .map_err(|error| error.to_string())
     .and_then(|result| result)?;
   Ok(provider.search_with_key(&query, api_key).await)
-}
-
-#[tauri::command]
-pub fn open_youtube_video(app: AppHandle, video_id: String) -> Result<(), String> {
-  if video_id.len() != 11
-    || !video_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-  {
-    return Err("The YouTube video identifier is invalid.".to_owned());
-  }
-  app
-    .opener()
-    .open_url(format!("https://www.youtube.com/watch?v={video_id}"), None::<&str>)
-    .map_err(|_| "Could not open the official YouTube page in your browser.".to_owned())
 }
 
 #[tauri::command]

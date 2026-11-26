@@ -2,7 +2,7 @@ import { isTauri } from '@tauri-apps/api/core'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { youtubeAdapter } from '../services/providers/youtube'
-import type { ProviderStatus, YouTubeSearchResponse, YouTubeVideo } from '../types/providers'
+import type { ProviderStatus, YouTubeSearchResponse } from '../types/providers'
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'string') return error
@@ -13,7 +13,6 @@ function errorMessage(error: unknown): string {
 export const useProvidersStore = defineStore('providers', () => {
   const youtubeStatus = ref<ProviderStatus | null>(null)
   const youtubeResults = ref<YouTubeSearchResponse | null>(null)
-  const selectedVideo = ref<YouTubeVideo | null>(null)
   const isLoadingStatus = ref(false)
   const isSavingKey = ref(false)
   const isCheckingConnection = ref(false)
@@ -69,7 +68,6 @@ export const useProvidersStore = defineStore('providers', () => {
     try {
       youtubeStatus.value = await youtubeAdapter.removeApiKey()
       youtubeResults.value = null
-      selectedVideo.value = null
       return true
     } catch (error) {
       actionError.value = errorMessage(error)
@@ -98,7 +96,6 @@ export const useProvidersStore = defineStore('providers', () => {
   async function searchYoutube(query: string): Promise<void> {
     const normalizedQuery = query.trim()
     const requestId = ++searchRequestId
-    selectedVideo.value = null
     actionError.value = ''
     if (!normalizedQuery) {
       youtubeResults.value = null
@@ -145,41 +142,17 @@ export const useProvidersStore = defineStore('providers', () => {
     }
   }
 
-  function selectYoutubeVideo(video: YouTubeVideo): void {
-    const resolution = youtubeAdapter.resolvePlayback(video)
-    selectedVideo.value = resolution.kind === 'youtube-embed' ? video : null
-  }
-
-  async function openYoutubeSource(video: YouTubeVideo): Promise<boolean> {
-    actionError.value = ''
-    try {
-      await youtubeAdapter.openSource(video)
-      return true
-    } catch (error) {
-      actionError.value = errorMessage(error)
-      return false
-    }
-  }
-
-  function clearSelectedVideo(): void {
-    selectedVideo.value = null
-  }
-
   return {
     actionError,
     checkYoutubeConnection,
-    clearSelectedVideo,
     isCheckingConnection,
     isLoadingStatus,
     isSavingKey,
     isSearchingYoutube,
     loadYoutubeStatus,
-    openYoutubeSource,
     removeYoutubeApiKey,
     saveYoutubeApiKey,
     searchYoutube,
-    selectYoutubeVideo,
-    selectedVideo,
     youtubeResults,
     youtubeStatus,
   }

@@ -34,10 +34,6 @@ class YouTubeAdapter implements ProviderAdapter<YouTubeVideo> {
     return 'denied'
   }
 
-  openSource(result: YouTubeVideo): Promise<void> {
-    requireDesktop()
-    return invoke<void>('open_youtube_video', { videoId: result.videoId })
-  }
 
   saveApiKey(apiKey: string): Promise<ProviderStatus> {
     requireDesktop()

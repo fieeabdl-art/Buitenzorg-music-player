@@ -1,6 +1,6 @@
-import type { PlayerTrack } from './player'
+import type { PlaybackTrack } from './player'
 
-export type PlaybackHistoryStatus = 'playing' | 'paused' | 'completed' | 'stopped' | 'failed' | 'interrupted'
+export type PlaybackHistoryStatus = 'loading' | 'playing' | 'paused' | 'completed' | 'stopped' | 'failed' | 'interrupted'
 
 export interface PlaybackHistoryEntry {
   historyId: number
@@ -8,5 +8,5 @@ export interface PlaybackHistoryEntry {
   positionSeconds: number
   listenedSeconds: number
   status: PlaybackHistoryStatus
-  track: PlayerTrack
+  track: PlaybackTrack
 }

@@ -12,6 +12,29 @@ export interface PlayerTrack {
   artworkUrl?: string | null
 }
 
+export interface YouTubePlayerTrack extends PlayerTrack {
+  source: 'youtube'
+  videoId: string
+}
+
+export type PlaybackTrack = PlayerTrack | YouTubePlayerTrack
+
+export interface YouTubePlayerController {
+  loadVideoById(videoId: string): void
+  playVideo(): void
+  pauseVideo(): void
+  stopVideo(): void
+  seekTo(seconds: number): void
+  setVolume(volume: number): void
+  setMuted(muted: boolean): void
+  getCurrentTime(): number
+  getDuration(): number
+  getPlayerState(): number
+  getVideoData(): { title?: string; author?: string; video_id?: string }
+  getIframe(): HTMLIFrameElement | null
+  destroy(): void
+}
+
 export type RepeatMode = 'off' | 'all' | 'one'
 
 export interface ResolvedTrackSource {

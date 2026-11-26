@@ -1,6 +1,6 @@
 # Buitenzorg Player desktop app
 
-Tauri 2 + Vue 3 + TypeScript + Vite + Tailwind CSS + Pinia + Lucide Icons. The selected Stillpoint Chamber interface connects to a versioned local SQLite database and includes managed local audio playback plus optional YouTube Data API v3 search. Local profile editing, YouTube playback, and downloads are not implemented.
+Tauri 2 + Vue 3 + TypeScript + Vite + Tailwind CSS + Pinia + Lucide Icons. The selected Stillpoint Chamber interface connects to a versioned local SQLite database and includes managed local audio playback plus optional YouTube Data API v3 search with official YouTube IFrame Player API playback. Local profile editing and downloads are not implemented; live YouTube playback still needs end-to-end verification in the packaged Tauri app.
 
 ## Requirements
 
@@ -9,7 +9,7 @@ Tauri 2 + Vue 3 + TypeScript + Vite + Tailwind CSS + Pinia + Lucide Icons. The s
 - Ubuntu/Linux: WebKitGTK 4.1 and the native development packages listed below.
 - Windows: Rust's MSVC toolchain, Microsoft C++ Build Tools, and WebView2 Runtime, as described in the official Tauri prerequisites.
 
-The project does not install system packages or Rust toolchains. The owner supplied Ubuntu prerequisites; native Tauri startup, database initialization, and local WAV playback have been verified in the Linux WebKitGTK app. Release packaging and Windows builds remain unverified.
+The project does not install system packages or Rust toolchains. Native Tauri startup, database initialization, and local WAV playback were previously verified in the Linux WebKitGTK app. The current Linux release executable and `.deb`, `.rpm`, and `AppImage` bundles build successfully; a release run with an isolated profile loaded the bundled WebKit extension. This verifies startup/extension loading, not YouTube's acceptance of its request identity or live playback. The Windows WebView2 hook is not built or tested here.
 
 ### Ubuntu 24.04 native prerequisites
 
@@ -72,7 +72,7 @@ The Vite preview uses browser mode and displays that desktop services are unavai
 npm run tauri:dev
 ```
 
-The `tauri:dev` script applies a development-only CSP allowance for the local Vite server. Both CSPs allow media only from the app's loopback audio endpoint; production configuration is in `src-tauri/tauri.conf.json`.
+The `tauri:dev` script applies a development-only CSP allowance for the local Vite server. Both CSPs allow local audio only from the app's loopback endpoint and allow the official YouTube API/player origins required for embedded playback; production configuration is in `src-tauri/tauri.conf.json`.
 
 ## Checks
 
@@ -103,14 +103,16 @@ npm run tauri:build
 - Buka **Discover** di aplikasi desktop, masukkan key pada field bertipe password, lalu pilih **Save API key** dan **Verify connection**. Key disimpan di credential store sistem operasi; key dapat diganti dengan menyimpan key baru atau dihapus lewat **Remove key**. Jika credential store tidak tersedia, aplikasi tidak menyimpan key dan menampilkan error.
 - Aplikasi mengirim key melalui header HTTPS `x-goog-api-key`, bukan URL. Google merekomendasikan header untuk menghindari key masuk ke URL/log URL. Key melewati IPC lokal Tauri dan berada di memori proses selama request; perlindungan saat tersimpan mengikuti konfigurasi credential store OS dan tidak melindungi dari proses lokal yang sudah dikompromikan. Implementasi provider tidak mencatat key ke log, UI setelah penyimpanan, SQLite, atau file konfigurasi.
 - Pencarian YouTube mengirim query yang diketik pengguna ke API resmi. Metadata pustaka, profil, dan riwayat dengar lokal tidak dikirim. Pencarian **Local library** tetap terpisah dan tidak memerlukan internet.
-- Hasil YouTube dibedakan dari hasil lokal dan hanya menampilkan metadata serta membuka halaman resmi YouTube. Hasil tidak diimpor sebagai track lokal, tidak masuk ke audio engine, dan tidak diunduh.
+- Hasil YouTube dibedakan dari hasil lokal. Tombol **Play** memakai `videoId` metadata resmi untuk memulai YouTube IFrame Player API di dalam aplikasi; tidak mengekstrak URL stream. Player standar, kontrol, dan branding YouTube tetap terlihat. Hasil tidak diimpor sebagai track lokal atau diunduh.
+- `PlayerStore` owns one queue and dispatches local tracks to the single HTML5 Audio host and YouTube tracks to the official iframe controller. Play/pause, next/previous, seek, volume, queue, and Now Playing use that shared state; changing source stops the previously active engine. YouTube listening sessions are stored separately from local track IDs in SQLite migration v4.
+- YouTube requires an HTTP `Referer` for embedded-player API clients. The Linux WebKitGTK extension and Windows WebView2 hook set `https://com.buitenzorg.player` only on the official iframe API and embed requests; this matches the configured reverse-DNS Tauri app identifier. The Windows hook has not been built or tested in this environment.
 - Pencarian memerlukan koneksi internet, API key valid, API aktif, dan kuota yang tersedia. Status loading, hasil kosong, key ditolak, kuota, timeout, jaringan, dan error provider ditampilkan tanpa mengganti hasil dengan data contoh.
-- **Status verifikasi:** tes otomatis memakai mock atau fixture aman dan memverifikasi penanganan respons/error; pencarian live dengan key pengguna yang valid belum diverifikasi. Request pembanding menggunakan key palsu hanya membuktikan endpoint membedakan header key invalid dari header yang tidak ada, bukan bahwa integrasi live berhasil.
-- **Uji live setelah key disiapkan:** di aplikasi desktop, simpan key dan pilih **Verify connection**; cari judul yang diketahui, pastikan hasil metadata nyata terbuka pada YouTube, lalu coba query yang tidak menghasilkan kecocokan. Jangan sengaja menghabiskan kuota. Hapus atau rotasi key melalui Cloud Console jika key terpapar; key yang dihapus dari aplikasi tetap perlu dicabut di Cloud Console bila ingin dinonaktifkan.
+- **Status verifikasi:** tes otomatis menggunakan mock/fixture untuk hasil pencarian, perintah riwayat, kontrol player, transisi sumber, dan error. Pencarian live dengan key pengguna valid dan playback video live melalui Tauri WebView belum diuji; kode implementasi dan frontend build saja tidak membuktikan layanan YouTube menerima identitas aplikasi.
+- **Uji live setelah key disiapkan:** di aplikasi desktop, simpan key dan pilih **Verify connection**; cari video yang boleh di-embed, pilih **Play**, pastikan iframe YouTube tetap terlihat dan berjalan, lalu uji pause, seek, volume, queue, dan error pada video yang tidak tersedia. Jangan sengaja menghabiskan kuota. Hapus atau rotasi key melalui Cloud Console jika key terpapar; key yang dihapus dari aplikasi tetap perlu dicabut di Cloud Console bila ingin dinonaktifkan.
 
 ## Local playback
 
-- The root application owns exactly one HTML5 Audio element. `PlayerStore` keeps it alive across route changes and owns the queue, playback status, position, volume, mute, shuffle, repeat, and history updates.
+- The root application owns exactly one HTML5 Audio element for local tracks. `PlayerStore` keeps that host alive across route changes and also routes YouTube tracks to the visible official iframe; queue, playback status, position, volume, mute, shuffle, repeat, and history share one state owner.
 - Tracks from the managed library can be played, paused/resumed, stopped, sought, queued, skipped, shuffled, and repeated. Playback advances to the next queued item at end of track; repeat-one and repeat-all are supported. Space toggles playback, Left/Right seeks by five seconds, Up/Down changes volume, and N/P select next/previous when focus is not in an editable field.
 - Track dan posisi terakhir yang dapat dilanjutkan dipulihkan tanpa autoplay. Posisi serta durasi dengar disimpan berkala dan saat pause/stop/error media; interval terakhir sebelum pause atau error ikut dihitung. Status selesai, gagal, dan terputus dicatat di SQLite. Lompatan seek tidak dihitung sebagai durasi dengar, dan repeat-one melanjutkan sesi yang sama tanpa membuat row riwayat baru.
 - WebKitGTK on Linux rejects media served by Tauri's custom `asset://` protocol even when the file is readable, so managed audio and album artwork use a small HTTP server bound only to `127.0.0.1`. It uses an OS-random per-process token, accepts only validated hash-based filenames within their managed directories, rejects symlinks and other methods, and supports single byte ranges for audio seeking. It does not expose a general filesystem endpoint or bind to a network interface.
@@ -120,7 +122,7 @@ npm run tauri:build
 ## Security and current scope
 
 - The Tauri capability grants only core event listen/unlisten permissions required by the app-ready bridge; filesystem and shell permissions are not enabled.
-- One persistent HTML5 audio engine is connected to local managed files through the restricted loopback range server; YouTube results do not enter this playback engine.
+- One persistent HTML5 audio engine handles managed local files through the restricted loopback range server. YouTube playback is separate and uses only the official IFrame Player API; search results are never treated as stream URLs or local files.
 - Pustaka SQLite lokal, impor terkelola, migrasi legacy hanya-baca, CRUD/urutan playlist, pencarian lokal, kontrol playback, metadata/artwork, dan halaman riwayat lokal sudah diimplementasikan. Pembuatan/pengeditan profil lokal belum tersedia.
-- YouTube search is available only through the user's configured official API key; provider results are never fabricated. Downloads remain disabled: the active player contains local tracks only, YouTube search results are not media URLs, and the YouTube adapter denies offline downloads. No authorized provider playback source is currently available, so no download queue or worker is exposed. The app does not bundle or update yt-dlp; the Linux audit found version `2024.04.09` on `PATH` and did not invoke it.
+- YouTube search is available only through the user's configured official API key; provider results are never fabricated. Embedded YouTube playback requires internet and may be denied for unavailable or non-embeddable videos. Downloads remain disabled: the YouTube adapter denies offline downloads, and no download queue or worker is exposed. The app does not bundle or update yt-dlp; the Linux audit found version `2024.04.09` on `PATH` and did not invoke it.
 - No music samples are shipped or shown as user content; synthetic items existed only in the design-selection previews.

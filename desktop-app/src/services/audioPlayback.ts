@@ -1,7 +1,8 @@
 import { invoke, isTauri } from '@tauri-apps/api/core'
 import type { LibraryItem, PlaylistTrack } from '../types/library'
 import type { PlaybackHistoryStatus } from '../types/history'
-import type { PlaybackResumeSource, PlayerTrack, ResolvedTrackSource } from '../types/player'
+import type { PlaybackResumeSource, PlayerTrack, ResolvedTrackSource, YouTubePlayerTrack } from '../types/player'
+import type { YouTubeVideo } from '../types/providers'
 
 interface BackendPlaybackSource {
   track: PlayerTrack
@@ -51,6 +52,25 @@ export function toPlayerTrack(item: LibraryItem | PlaylistTrack): PlayerTrack {
   }
 }
 
+export function toYouTubePlayerTrack(video: YouTubeVideo): YouTubePlayerTrack {
+  let hash = 2166136261
+  for (const character of video.videoId) {
+    hash = Math.imul(hash ^ character.charCodeAt(0), 16777619)
+  }
+  return {
+    id: -Math.max(1, Math.abs(hash)),
+    title: video.title,
+    artist: video.artist || 'YouTube channel',
+    album: 'YouTube',
+    format: 'youtube',
+    durationSeconds: video.durationSeconds,
+    availability: 'available',
+    artworkUrl: video.thumbnailUrl,
+    source: 'youtube',
+    videoId: video.videoId,
+  }
+}
+
 export async function resolveLocalTrack(trackId: number): Promise<ResolvedTrackSource> {
   requireDesktop()
   return invoke<BackendPlaybackSource>('resolve_track_for_playback', { trackId })
@@ -64,6 +84,17 @@ export async function getLastPlayback(): Promise<PlaybackResumeSource | null> {
 export function startPlaybackHistory(trackId: number): Promise<number> {
   requireDesktop()
   return invoke<number>('start_playback_history', { trackId })
+}
+
+export function startYouTubePlaybackHistory(track: YouTubePlayerTrack): Promise<number> {
+  requireDesktop()
+  return invoke<number>('start_youtube_playback_history', {
+    videoId: track.videoId,
+    title: track.title,
+    artist: track.artist,
+    artworkUrl: track.artworkUrl ?? null,
+    durationSeconds: track.durationSeconds,
+  })
 }
 
 export function updatePlaybackHistory(

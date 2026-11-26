@@ -8,6 +8,7 @@ import {
   LibraryBig,
   ListMusic,
   MoreHorizontal,
+  Play,
   Search,
   Settings2,
   UserRound,
@@ -24,6 +25,7 @@ const primaryLinks = [
   { label: 'Listen', name: 'home', icon: Headphones },
   { label: 'Library', name: 'library', icon: LibraryBig },
   { label: 'Discover', name: 'discover', icon: Compass },
+  { label: 'Now playing', name: 'now-playing', icon: Play },
   { label: 'Playlists', name: 'playlists', icon: ListMusic },
 ]
 

@@ -1,7 +1,7 @@
 {
   "app": {
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; img-src 'self' asset: http://asset.localhost http://127.0.0.1:* data: blob:; media-src 'self' http://127.0.0.1:* blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; script-src 'self' https://www.youtube.com https://s.ytimg.com; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420 https://www.youtube.com https://*.youtube.com https://*.google.com; img-src 'self' asset: http://asset.localhost http://127.0.0.1:* https://i.ytimg.com https://yt3.ggpht.com data: blob:; media-src 'self' http://127.0.0.1:* blob:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; font-src 'self' data:; style-src 'self' 'unsafe-inline'"
     }
   }
 }

@@ -337,6 +337,17 @@ impl LibraryService {
     self.database.start_playback_history(track_id)
   }
 
+  pub fn start_youtube_playback_history(
+    &self,
+    video_id: &str,
+    title: &str,
+    artist: &str,
+    artwork_url: Option<&str>,
+    duration_seconds: Option<i64>,
+  ) -> Result<i64, String> {
+    self.database.start_youtube_playback_history(video_id, title, artist, artwork_url, duration_seconds)
+  }
+
   pub fn update_playback_history(
     &self,
     history_id: i64,

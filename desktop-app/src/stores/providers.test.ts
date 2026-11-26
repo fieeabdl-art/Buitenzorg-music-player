@@ -8,8 +8,6 @@ const mocks = vi.hoisted(() => ({
   removeApiKey: vi.fn(),
   checkConnection: vi.fn(),
   search: vi.fn(),
-  resolvePlayback: vi.fn(),
-  openSource: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -23,8 +21,6 @@ vi.mock('../services/providers/youtube', () => ({
     removeApiKey: mocks.removeApiKey,
     checkConnection: mocks.checkConnection,
     search: mocks.search,
-    resolvePlayback: mocks.resolvePlayback,
-    openSource: mocks.openSource,
   },
 }))
 
@@ -70,8 +66,6 @@ describe('music provider store', () => {
     })
     mocks.checkConnection.mockResolvedValue(connectedStatus)
     mocks.search.mockImplementation((query: string) => Promise.resolve(searchResponse(query)))
-    mocks.resolvePlayback.mockReturnValue({ kind: 'youtube-embed', videoId: video.videoId })
-    mocks.openSource.mockResolvedValue(undefined)
   })
 
   it('does not call the desktop provider from browser preview', async () => {
@@ -116,12 +110,10 @@ describe('music provider store', () => {
   it('clears provider results when the saved key is removed', async () => {
     const providers = useProvidersStore()
     await providers.searchYoutube('song')
-    providers.selectYoutubeVideo(video)
 
     await expect(providers.removeYoutubeApiKey()).resolves.toBe(true)
 
     expect(providers.youtubeResults).toBeNull()
-    expect(providers.selectedVideo).toBeNull()
     expect(providers.youtubeStatus?.hasApiKey).toBe(false)
   })
 

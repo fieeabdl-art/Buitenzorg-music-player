@@ -4,11 +4,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const PAGE_SIZE: usize = 50;
 const INITIAL_SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const TRACK_METADATA_SCHEMA: &str = include_str!("../migrations/0002_track_metadata.sql");
 const PLAYBACK_HISTORY_SCHEMA: &str = include_str!("../migrations/0003_playback_history_sessions.sql");
+const YOUTUBE_PLAYBACK_HISTORY_SCHEMA: &str = include_str!("../migrations/0004_youtube_playback_history.sql");
 
 #[derive(Clone)]
 pub struct Database {
@@ -119,6 +120,10 @@ pub struct PlaybackTrack {
   pub year: Option<i64>,
   pub track_number: Option<i64>,
   pub artwork_url: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub source: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub video_id: Option<String>,
   #[serde(skip_serializing)]
   pub(crate) artwork_name: Option<String>,
   #[serde(skip_serializing)]
@@ -216,8 +221,23 @@ impl Database {
       current_version = 3;
     }
 
+    if current_version < 4 {
+      let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+      transaction.execute_batch(YOUTUBE_PLAYBACK_HISTORY_SCHEMA).map_err(|error| error.to_string())?;
+      transaction
+        .pragma_update(None, "user_version", 4_i64)
+        .map_err(|error| error.to_string())?;
+      transaction.commit().map_err(|error| error.to_string())?;
+      current_version = 4;
+    }
+
     connection
       .execute("UPDATE playback_history SET status = 'interrupted' WHERE status IN ('playing', 'paused')", [])
+      .map_err(|error| error.to_string())?;
+    connection
+      .execute("UPDATE youtube_playback_history SET status = 'interrupted' WHERE status IN ('loading', 'playing', 'paused')", [])
       .map_err(|error| error.to_string())?;
 
     if current_version != SCHEMA_VERSION {
@@ -301,6 +321,8 @@ impl Database {
             year: row.get(9)?,
             track_number: row.get(10)?,
             artwork_url: None,
+            source: None,
+            video_id: None,
           })
         },
       )
@@ -319,6 +341,38 @@ impl Database {
     Ok(connection.last_insert_rowid())
   }
 
+  pub fn start_youtube_playback_history(
+    &self,
+    video_id: &str,
+    title: &str,
+    artist: &str,
+    artwork_url: Option<&str>,
+    duration_seconds: Option<i64>,
+  ) -> Result<i64, String> {
+    if video_id.len() != 11
+      || !video_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+      || title.trim().is_empty()
+      || title.chars().count() > 500
+      || artist.trim().is_empty()
+      || artist.chars().count() > 500
+      || duration_seconds.is_some_and(|duration| duration < 0)
+      || artwork_url.is_some_and(|url| !url.starts_with("https://i.ytimg.com/") || url.len() > 2048)
+    {
+      return Err("YouTube playback metadata is invalid.".to_owned());
+    }
+    let connection = self.lock()?;
+    connection
+      .execute(
+        "INSERT INTO youtube_playback_history (video_id, title, artist, artwork_url, duration_seconds, status) VALUES (?1, ?2, ?3, ?4, ?5, 'loading')",
+        params![video_id, title.trim(), artist.trim(), artwork_url, duration_seconds],
+      )
+      .map_err(|error| error.to_string())?;
+    connection
+      .last_insert_rowid()
+      .checked_neg()
+      .ok_or_else(|| "YouTube playback history identifier is invalid.".to_owned())
+  }
+
   pub fn update_playback_history(
     &self,
     history_id: i64,
@@ -326,19 +380,31 @@ impl Database {
     listened_seconds: i64,
     status: &str,
   ) -> Result<(), String> {
-    if history_id <= 0
+    if history_id == 0
       || position_seconds < 0
       || listened_seconds < 0
-      || !matches!(status, "playing" | "paused" | "completed" | "stopped" | "failed" | "interrupted")
+      || !matches!(status, "loading" | "playing" | "paused" | "completed" | "stopped" | "failed" | "interrupted")
     {
       return Err("Playback history update is invalid.".to_owned());
     }
     let connection = self.lock()?;
-    let updated = connection
-      .execute(
-        "UPDATE playback_history SET position_seconds = ?1, listened_seconds = ?2, status = ?3 WHERE id = ?4 AND status IN ('playing', 'paused', 'interrupted')",
-        params![position_seconds, listened_seconds, status, history_id],
+    let (table, record_id, active_statuses) = if history_id > 0 {
+      if status == "loading" {
+        return Err("Playback history update is invalid.".to_owned());
+      }
+      ("playback_history", history_id, "'playing', 'paused', 'interrupted'")
+    } else {
+      (
+        "youtube_playback_history",
+        history_id.checked_abs().ok_or_else(|| "Playback history entry identifier is invalid.".to_owned())?,
+        "'loading', 'playing', 'paused', 'interrupted'",
       )
+    };
+    let query = format!(
+      "UPDATE {table} SET position_seconds = ?1, listened_seconds = ?2, status = ?3 WHERE id = ?4 AND status IN ({active_statuses})"
+    );
+    let updated = connection
+      .execute(&query, params![position_seconds, listened_seconds, status, record_id])
       .map_err(|error| error.to_string())?;
     if updated == 0 {
       return Err("Playback history entry is missing or no longer active.".to_owned());
@@ -349,52 +415,103 @@ impl Database {
   pub fn playback_history(&self, limit: usize) -> Result<Vec<PlaybackHistoryItem>, String> {
     let limit = limit.clamp(1, 100) as i64;
     let connection = self.lock()?;
-    let mut statement = connection
-      .prepare("SELECT h.id, h.played_at, h.position_seconds, h.listened_seconds, h.status, t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM playback_history h JOIN tracks t ON t.id = h.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY h.played_at DESC, h.id DESC LIMIT ?1")
-      .map_err(|error| error.to_string())?;
-    let rows = statement
-      .query_map([limit], |row| {
-        Ok(PlaybackHistoryItem {
-          history_id: row.get(0)?,
-          played_at: row.get(1)?,
-          position_seconds: row.get(2)?,
-          listened_seconds: row.get(3)?,
-          status: row.get(4)?,
-          track: PlaybackTrack {
-            id: row.get(5)?,
-            title: row.get(6)?,
-            artist: row.get(7)?,
-            album: row.get(8)?,
-            format: row.get(9)?,
-            duration_seconds: row.get(10)?,
-            availability: None,
-            stored_name: row.get(11)?,
-            artwork_name: row.get(12)?,
-            genre: row.get(13)?,
-            year: row.get(14)?,
-            track_number: row.get(15)?,
-            artwork_url: None,
-          },
+    let mut entries = {
+      let mut statement = connection
+        .prepare("SELECT h.id, h.played_at, h.position_seconds, h.listened_seconds, h.status, t.id, t.title, COALESCE(a.name, 'Unknown artist'), COALESCE(al.title, 'Unknown album'), t.format, t.duration_seconds, t.stored_name, COALESCE(t.artwork_name, al.artwork_name), t.genre, t.year, t.track_number FROM playback_history h JOIN tracks t ON t.id = h.track_id LEFT JOIN artists a ON a.id = t.artist_id LEFT JOIN albums al ON al.id = t.album_id ORDER BY h.played_at DESC, h.id DESC LIMIT ?1")
+        .map_err(|error| error.to_string())?;
+      let rows = statement
+        .query_map([limit], |row| {
+          Ok(PlaybackHistoryItem {
+            history_id: row.get(0)?,
+            played_at: row.get(1)?,
+            position_seconds: row.get(2)?,
+            listened_seconds: row.get(3)?,
+            status: row.get(4)?,
+            track: PlaybackTrack {
+              id: row.get(5)?,
+              title: row.get(6)?,
+              artist: row.get(7)?,
+              album: row.get(8)?,
+              format: row.get(9)?,
+              duration_seconds: row.get(10)?,
+              availability: None,
+              stored_name: row.get(11)?,
+              artwork_name: row.get(12)?,
+              genre: row.get(13)?,
+              year: row.get(14)?,
+              track_number: row.get(15)?,
+              artwork_url: None,
+              source: None,
+              video_id: None,
+            },
+          })
         })
-      })
-      .map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+      rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?
+    };
+    {
+      let mut statement = connection
+        .prepare("SELECT id, played_at, position_seconds, listened_seconds, status, video_id, title, artist, artwork_url, duration_seconds FROM youtube_playback_history ORDER BY played_at DESC, id DESC LIMIT ?1")
+        .map_err(|error| error.to_string())?;
+      let rows = statement
+        .query_map([limit], |row| {
+          let id: i64 = row.get(0)?;
+          Ok(PlaybackHistoryItem {
+            history_id: -id,
+            played_at: row.get(1)?,
+            position_seconds: row.get(2)?,
+            listened_seconds: row.get(3)?,
+            status: row.get(4)?,
+            track: PlaybackTrack {
+              id: -id,
+              title: row.get(6)?,
+              artist: row.get(7)?,
+              album: "YouTube".to_owned(),
+              format: "youtube".to_owned(),
+              duration_seconds: row.get(9)?,
+              availability: Some("available".to_owned()),
+              stored_name: String::new(),
+              artwork_name: None,
+              genre: None,
+              year: None,
+              track_number: None,
+              artwork_url: row.get(8)?,
+              source: Some("youtube".to_owned()),
+              video_id: Some(row.get(5)?),
+            },
+          })
+        })
+        .map_err(|error| error.to_string())?;
+      entries.extend(rows.collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?);
+    }
+    entries.sort_by(|left, right| {
+      right.played_at.cmp(&left.played_at).then_with(|| right.history_id.cmp(&left.history_id))
+    });
+    entries.truncate(limit as usize);
+    Ok(entries)
   }
 
   pub fn delete_playback_history(&self, history_id: i64) -> Result<(), String> {
-    if history_id <= 0 {
+    if history_id == 0 {
       return Err("Playback history entry identifier is invalid.".to_owned());
     }
     let connection = self.lock()?;
+    let is_youtube = history_id < 0;
+    let record_id = history_id.checked_abs().ok_or_else(|| "Playback history entry identifier is invalid.".to_owned())?;
+    let table = if is_youtube { "youtube_playback_history" } else { "playback_history" };
+    let active_statuses = if is_youtube { "'loading', 'playing', 'paused'" } else { "'playing', 'paused'" };
     let deleted = connection
-      .execute("DELETE FROM playback_history WHERE id = ?1 AND status NOT IN ('playing', 'paused')", [history_id])
+      .execute(
+        &format!("DELETE FROM {table} WHERE id = ?1 AND status NOT IN ({active_statuses})"),
+        [record_id],
+      )
       .map_err(|error| error.to_string())?;
     if deleted == 0 {
       let status: Option<String> = connection
-        .query_row("SELECT status FROM playback_history WHERE id = ?1", [history_id], |row| row.get(0))
+        .query_row(&format!("SELECT status FROM {table} WHERE id = ?1"), [record_id], |row| row.get(0))
         .optional()
         .map_err(|error| error.to_string())?;
-      return Err(if matches!(status.as_deref(), Some("playing" | "paused")) {
+      return Err(if matches!(status.as_deref(), Some("loading" | "playing" | "paused")) {
         "Stop the active playback before removing its history entry.".to_owned()
       } else {
         "Playback history entry not found.".to_owned()
@@ -404,10 +521,18 @@ impl Database {
   }
 
   pub fn clear_playback_history(&self) -> Result<usize, String> {
-    self
-      .lock()?
+    let mut connection = self.lock()?;
+    let transaction = connection
+      .transaction_with_behavior(TransactionBehavior::Immediate)
+      .map_err(|error| error.to_string())?;
+    let local_count = transaction
       .execute("DELETE FROM playback_history WHERE status NOT IN ('playing', 'paused')", [])
-      .map_err(|error| error.to_string())
+      .map_err(|error| error.to_string())?;
+    let youtube_count = transaction
+      .execute("DELETE FROM youtube_playback_history WHERE status NOT IN ('loading', 'playing', 'paused')", [])
+      .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(local_count + youtube_count)
   }
 
   pub fn latest_playback_history(&self) -> Result<Option<PlaybackHistoryEntry>, String> {
@@ -435,6 +560,8 @@ impl Database {
               year: row.get(12)?,
               track_number: row.get(13)?,
               artwork_url: None,
+              source: None,
+              video_id: None,
             },
           })
         },
@@ -989,11 +1116,11 @@ mod tests {
     let path = directory.join("library.sqlite3");
 
     let database = Database::open(&path).unwrap();
-    assert_eq!(database.schema_version().unwrap(), 3);
+    assert_eq!(database.schema_version().unwrap(), 4);
     drop(database);
 
     let reopened = Database::open(&path).unwrap();
-    assert_eq!(reopened.schema_version().unwrap(), 3);
+    assert_eq!(reopened.schema_version().unwrap(), 4);
     assert_eq!(reopened.library_page("all", 0).unwrap().total_count, 0);
 
     drop(reopened);
@@ -1016,7 +1143,7 @@ mod tests {
       .unwrap()
       .query_row("SELECT value FROM preserved_user_data", [], |row| row.get(0))
       .unwrap();
-    assert_eq!(database.schema_version().unwrap(), 3);
+    assert_eq!(database.schema_version().unwrap(), 4);
     assert_eq!(value, "keep");
 
     drop(database);
@@ -1043,7 +1170,7 @@ mod tests {
     }
 
     let database = Database::open(&path).unwrap();
-    assert_eq!(database.schema_version().unwrap(), 3);
+    assert_eq!(database.schema_version().unwrap(), 4);
     let item = &database.library_page("all", 0).unwrap().items[0];
     assert_eq!(item.title, "Legacy track");
     assert_eq!(item.genre, None);
@@ -1078,6 +1205,7 @@ mod tests {
       "liked_tracks",
       "downloads",
       "playback_history",
+      "youtube_playback_history",
       "provider_status",
       "application_settings",
     ] {
@@ -1183,6 +1311,61 @@ mod tests {
     assert_eq!(latest.track.title, "Resume point");
     assert!(database.update_playback_history(history_id, -1, 0, "paused").is_err());
     assert!(database.start_playback_history(i64::MAX).is_err());
+  }
+
+  #[test]
+  fn youtube_playback_history_validates_metadata_and_keeps_provider_data_separate() {
+    let database = Database::open_in_memory().unwrap();
+    let thumbnail = "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg";
+    let history_id = database
+      .start_youtube_playback_history("M7lc1UVf-VE", "Example video", "Example channel", Some(thumbnail), Some(120))
+      .unwrap();
+    assert!(history_id < 0);
+    assert!(database.delete_playback_history(history_id).is_err());
+
+    database.update_playback_history(history_id, 0, 0, "playing").unwrap();
+    database.update_playback_history(history_id, 9, 8, "paused").unwrap();
+    let entry = database.playback_history(100).unwrap().remove(0);
+    assert_eq!(entry.history_id, history_id);
+    assert_eq!(entry.status, "paused");
+    assert_eq!(entry.position_seconds, 9);
+    assert_eq!(entry.listened_seconds, 8);
+    assert_eq!(entry.track.source.as_deref(), Some("youtube"));
+    assert_eq!(entry.track.video_id.as_deref(), Some("M7lc1UVf-VE"));
+    assert_eq!(entry.track.title, "Example video");
+    assert_eq!(entry.track.artwork_url.as_deref(), Some(thumbnail));
+    assert!(database.latest_playback_history().unwrap().is_none());
+    assert_eq!(database.clear_playback_history().unwrap(), 0);
+
+    database.update_playback_history(history_id, 12, 11, "completed").unwrap();
+    assert_eq!(database.clear_playback_history().unwrap(), 1);
+    assert!(database.playback_history(100).unwrap().is_empty());
+
+    assert!(database.start_youtube_playback_history("invalid", "Title", "Channel", None, None).is_err());
+    assert!(database.start_youtube_playback_history("M7lc1UVf-VE", "Title", "Channel", Some("https://i.ytimg.com.evil.example/art.jpg"), None).is_err());
+    assert!(database.start_youtube_playback_history("M7lc1UVf-VE", " ", "Channel", None, None).is_err());
+  }
+
+  #[test]
+  fn reopening_database_marks_youtube_loading_sessions_interrupted() {
+    let directory = test_directory();
+    let path = directory.join("library.sqlite3");
+    let history_id;
+    {
+      let database = Database::open(&path).unwrap();
+      history_id = database
+        .start_youtube_playback_history("M7lc1UVf-VE", "Example video", "Example channel", None, Some(120))
+        .unwrap();
+    }
+
+    let reopened = Database::open(&path).unwrap();
+    let entry = reopened.playback_history(100).unwrap().remove(0);
+    assert_eq!(entry.history_id, history_id);
+    assert_eq!(entry.status, "interrupted");
+    assert!(reopened.delete_playback_history(history_id).is_ok());
+
+    drop(reopened);
+    fs::remove_dir_all(directory).unwrap();
   }
 
   #[test]

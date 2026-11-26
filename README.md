@@ -2,7 +2,7 @@
 
 **Buitenzorg Player — Music, Redefined.**
 
-A local-first desktop music library and player. Ubuntu/Linux is the first target; the architecture also considers Windows and macOS. The Tauri/Vue shell, versioned SQLite storage, managed local imports, metadata scanning, legacy-library migration, local search, playlist editing, and local playback are implemented. Playback history records listening time through pause and media errors. YouTube Data API v3 search is implemented for a user-supplied key, but live search with a valid user key has not yet been verified; profile editing, YouTube playback, and downloads remain unavailable because no current provider supplies an authorized media URL.
+A local-first desktop music library and player. Ubuntu/Linux is the first target; the architecture also considers Windows and macOS. The Tauri/Vue shell, versioned SQLite storage, managed local imports, metadata scanning, legacy-library migration, local search, playlist editing, and local playback are implemented. YouTube Data API v3 search and official IFrame Player API playback are integrated for user-supplied searches; neither live search with a valid user key nor end-to-end playback in a packaged Tauri app has been verified yet. Profile editing and downloads remain unavailable.
 
 ## Product principles
 

@@ -49,5 +49,4 @@ export interface ProviderAdapter<T> {
   search(query: string): Promise<YouTubeSearchResponse>
   resolvePlayback(result: T): PlaybackResolution
   downloadEligibility(result: T): DownloadEligibility
-  openSource(result: T): Promise<void>
 }
