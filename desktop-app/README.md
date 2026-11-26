@@ -95,12 +95,16 @@ npm run tauri:build
 - Playlists support local create, rename, delete, track add/remove, and ordering. Search checks actual local title, artist, album, and source filename metadata; it does not query any online provider.
 - SQLite migrations and file operations are owned by Rust commands. The frontend receives records and import reports through Tauri IPC; it has no filesystem or shell capability. Provider credentials are not stored in SQLite.
 
-## YouTube search
+## Pencarian YouTube
 
-- Open **Discover** to save, verify, or remove a user-supplied YouTube Data API v3 key. The key is stored in the operating system credential store and is never displayed again after saving.
-- YouTube searches send the entered query to the official provider API. Local library contents, profile data, and listening history are not sent.
-- Search results show provider metadata and open the official YouTube watch page in the system browser. Results are not imported as local tracks; this feature does not embed playback or download audio.
-- Provider search requires an active internet connection, a valid key with YouTube Data API v3 enabled, and available API quota. Provider errors and quota limits are shown rather than replaced with sample results.
+- Untuk menyiapkan key milik sendiri, pilih atau buat project di Google Cloud Console, aktifkan **YouTube Data API v3**, lalu buat API key. Batasi penggunaan key ke API tersebut, pantau kuota di Cloud Console, dan jangan membagikan atau memasukkan key ke repository.
+- Buka **Discover** di aplikasi desktop, masukkan key pada field bertipe password, lalu pilih **Save API key** dan **Verify connection**. Key disimpan di credential store sistem operasi; key dapat diganti dengan menyimpan key baru atau dihapus lewat **Remove key**. Jika credential store tidak tersedia, aplikasi tidak menyimpan key dan menampilkan error.
+- Aplikasi mengirim key melalui header HTTPS `x-goog-api-key`, bukan URL. Google merekomendasikan header untuk menghindari key masuk ke URL/log URL. Key melewati IPC lokal Tauri dan berada di memori proses selama request; perlindungan saat tersimpan mengikuti konfigurasi credential store OS dan tidak melindungi dari proses lokal yang sudah dikompromikan. Implementasi provider tidak mencatat key ke log, UI setelah penyimpanan, SQLite, atau file konfigurasi.
+- Pencarian YouTube mengirim query yang diketik pengguna ke API resmi. Metadata pustaka, profil, dan riwayat dengar lokal tidak dikirim. Pencarian **Local library** tetap terpisah dan tidak memerlukan internet.
+- Hasil YouTube dibedakan dari hasil lokal dan hanya menampilkan metadata serta membuka halaman resmi YouTube. Hasil tidak diimpor sebagai track lokal, tidak masuk ke audio engine, dan tidak diunduh.
+- Pencarian memerlukan koneksi internet, API key valid, API aktif, dan kuota yang tersedia. Status loading, hasil kosong, key ditolak, kuota, timeout, jaringan, dan error provider ditampilkan tanpa mengganti hasil dengan data contoh.
+- **Status verifikasi:** tes otomatis memakai mock atau fixture aman dan memverifikasi penanganan respons/error; pencarian live dengan key pengguna yang valid belum diverifikasi. Request pembanding menggunakan key palsu hanya membuktikan endpoint membedakan header key invalid dari header yang tidak ada, bukan bahwa integrasi live berhasil.
+- **Uji live setelah key disiapkan:** di aplikasi desktop, simpan key dan pilih **Verify connection**; cari judul yang diketahui, pastikan hasil metadata nyata terbuka pada YouTube, lalu coba query yang tidak menghasilkan kecocokan. Jangan sengaja menghabiskan kuota. Hapus atau rotasi key melalui Cloud Console jika key terpapar; key yang dihapus dari aplikasi tetap perlu dicabut di Cloud Console bila ingin dinonaktifkan.
 
 ## Local playback
 

@@ -2,7 +2,7 @@
 
 **Buitenzorg Player — Music, Redefined.**
 
-A local-first desktop music library and player. Ubuntu/Linux is the first target; the architecture also considers Windows and macOS. The Tauri/Vue shell, versioned SQLite storage, managed local imports, metadata scanning, legacy-library migration, local search, playlist editing, and local playback are implemented. YouTube Data API v3 search is available when configured with a user-supplied key; profile editing, YouTube playback, and downloads remain unavailable.
+A local-first desktop music library and player. Ubuntu/Linux is the first target; the architecture also considers Windows and macOS. The Tauri/Vue shell, versioned SQLite storage, managed local imports, metadata scanning, legacy-library migration, local search, playlist editing, and local playback are implemented. YouTube Data API v3 search is implemented for a user-supplied key, but live search with a valid user key has not yet been verified; profile editing, YouTube playback, and downloads remain unavailable.
 
 ## Product principles
 
